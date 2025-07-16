@@ -62,23 +62,13 @@ impl GsDmaBuf {
     pub fn new(render_node: DrmNode, video_info: VideoInfoDmaDrm) -> Option<Self> {
         tracing::debug!("Creating DMA buffer from {:?}", &video_info);
         let drm_fourcc = gst_video_format_to_drm_fourcc(&video_info)?;
-        let mut drm_modifier = gst_video_format_to_drm_modifier(&video_info)?;
+        let (mut drm_modifier, original_modifier) = gst_video_format_to_drm_modifier(&video_info)?;
         tracing::info!(
-            "Creating DMA buffer - DrmFourcc: {:?}, Modifier: {:?}",
+            "Creating DMA buffer - DrmFourcc: {:?}, Modifier: {:?}, Original Modifier: {:?}",
             drm_fourcc,
-            drm_modifier
+            drm_modifier,
+            original_modifier
         );
-
-        // NOTE: This is a workaround for the i915 4-tiled modifiers
-        //       not being advertised by gstreamer elements.
-        // - In this part we check for y-tiled modifiers and
-        //   change them back to 4-tiled modifiers to make them actually work.
-        //   (These modifiers overlap well enough to work interchangeably)
-        // Earlier part in gst-plugin-wayland-display waylandsrc/imp.rs.
-        let mut workaround_modifier = None;
-        if drm_modifier == DrmModifier::I915_y_tiled {
-            workaround_modifier = Some(DrmModifier::Unrecognized(0x0100000000000009));
-        }
 
         let gbm = new_gbm_device(render_node)?;
         let allocator = GbmAllocator::new(gbm, GbmBufferFlags::RENDERING);
@@ -91,13 +81,18 @@ impl GsDmaBuf {
             drm_fourcc,
             &modifiers,
         );
-        if result.is_err() && workaround_modifier.is_some() {
+        if result.is_err() && original_modifier.is_some() {
             tracing::warn!(
                 "Failed to create buffer with modifier {:?}, trying workaround modifier",
                 drm_modifier
             );
-            // Try the workaround modifier
-            drm_modifier = workaround_modifier.unwrap();
+            // NOTE: This is a workaround for the i915 4-tiled modifiers
+            //       not being advertised by gstreamer elements.
+            // - In this part we check for error from first try and
+            //   attempt again with original modifier instead.
+            //   (These modifiers overlap well enough to work interchangeably)
+            // Earlier part in gst-plugin-wayland-display waylandsrc/imp.rs.
+            drm_modifier = original_modifier.unwrap();
             result = dma_allocator.create_buffer(
                 video_info.width(),
                 video_info.height(),
@@ -303,18 +298,25 @@ pub fn gst_video_format_to_drm_fourcc(format: &VideoInfoDmaDrm) -> Option<DrmFou
     }
 }
 
-pub fn gst_video_format_to_drm_modifier(format: &VideoInfoDmaDrm) -> Option<DrmModifier> {
+pub fn gst_video_format_to_drm_modifier(format: &VideoInfoDmaDrm) -> Option<(DrmModifier, Option<DrmModifier>)> {
     let full_modifier = format.modifier();
-    match Modifier::try_from(full_modifier) {
-        Ok(modifier) => Some(modifier),
-        Err(error) => {
-            tracing::warn!(
-                "Failed to convert modifier ({:?}): {:?}",
-                full_modifier,
-                error
-            );
+    let caps = format.to_caps().unwrap();
+    let drm_format_str = caps.structure(0)?.get::<&str>("drm-format").ok()?;
+
+    // Check if the format string contains an original modifier
+    let parts: Vec<&str> = drm_format_str.split(':').collect();
+    if parts.len() == 3 {
+        // Format: "ABCD:workaround_modifier:original_modifier"
+        let original_modifier = u64::from_str_radix(&parts[2][2..], 16).ok()?;
+        Some((
+            Modifier::try_from(full_modifier).ok()?,
+            Some(Modifier::Unrecognized(original_modifier))
+        ))
+    } else {
+        Some((
+            Modifier::try_from(full_modifier).ok()?,
             None
-        }
+        ))
     }
 }
 
@@ -437,7 +439,7 @@ mod tests {
         );
         assert_eq!(
             gst_video_format_to_drm_modifier(&drm_video_info),
-            Some(Modifier::Linear)
+            Some((Modifier::Linear, None))
         );
 
         let raw_buffer = GsDmaBuf::new(render_node, drm_video_info);
@@ -500,7 +502,7 @@ mod tests {
 
         assert_eq!(
             gst_video_format_to_drm_modifier(&drm_video_info).unwrap(),
-            Modifier::Unrecognized(0x0300000000606010)
+            (Modifier::Unrecognized(0x0300000000606010), None)
         )
     }
 
@@ -528,7 +530,7 @@ mod tests {
 
         assert_eq!(
             gst_video_format_to_drm_modifier(&drm_video_info).unwrap(),
-            Modifier::Unrecognized(0x0200000000042305)
+            (Modifier::Unrecognized(0x0200000000042305), None)
         )
     }
 }

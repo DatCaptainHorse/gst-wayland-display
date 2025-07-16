@@ -15,10 +15,7 @@ use gst_base::subclass::prelude::*;
 use once_cell::sync::Lazy;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::Registry;
-use waylanddisplaycore::{
-    channel, ButtonState, Channel, Command, DrmFormat, DrmModifier, GstVideoInfo, KeyState, Sender,
-    WaylandDisplay,
-};
+use waylanddisplaycore::{channel, ButtonState, Channel, Command, DrmFormat, DrmModifier, DrmVendor, GstVideoInfo, KeyState, Sender, WaylandDisplay};
 
 use crate::utils::{GstLayer, CAT};
 
@@ -485,6 +482,20 @@ impl PushSrcImpl for WaylandDisplaySrc {
     }
 }
 
+fn fourcc_mod_get_vendor(modifier: u64) -> Result<DrmVendor, String> {
+    let vi: u8 = ((modifier >> 56) & 0xff) as u8;
+    DrmVendor::try_from(vi)
+        .map_err(|_| format!("Unknown vendor for modifier: 0x{:016x}", modifier))
+}
+
+fn fourcc_mod_is_vendor(modifier: u64, vendor: DrmVendor) -> bool {
+    fourcc_mod_get_vendor(modifier) == Ok(vendor)
+}
+
+fn fourcc_mod_num(modifier: u64) -> u64 {
+    modifier & 0xFFFFFFFFFFFFFF
+}
+
 fn drm_to_gst_format(format: &DrmFormat) -> Option<String> {
     let video_format = format.code.to_string();
     let video_format = video_format.trim();
@@ -493,14 +504,18 @@ fn drm_to_gst_format(format: &DrmFormat) -> Option<String> {
     } else {
         match format.modifier {
             DrmModifier::Invalid => None,
-            DrmModifier::Unrecognized(0x0100000000000009) => {
+            DrmModifier::Unrecognized(unrecognized) if fourcc_mod_is_vendor(unrecognized, DrmVendor::Intel) && fourcc_mod_num(unrecognized) >= 9 => {
                 // NOTE: This is a workaround for the i915 4-tiled modifiers
                 //       not being advertised by gstreamer elements.
-                // - In this part we tell we map any 4-tiled modifiers
-                //   to y-tiled ones for compatibility with gstreamer.
+                // - In this part we lie that any 4-tiled modifiers
+                //   are y-tiled ones for compatibility with gstreamer.
                 // Continued in wayland-display-core allocator/mod.rs.
-                let modifier: u64 = DrmModifier::I915_y_tiled.into();
-                Some(format!("{:<4}:0x{:016x}", video_format, modifier))
+                // NOTE: This code assumes everything past the 9th Intel modifier is compatible
+                //       with the y-tiled modifier. In future should be re-checked.
+                let workaround_modifier: u64 = DrmModifier::I915_y_tiled.into();
+                // We bundle both the workaround and original modifier to pass them easily to core.
+                // Format: "ABCD:workaround_modifier:original_modifier"
+                Some(format!("{:<4}:0x{:016x}:0x{:016x}", video_format, workaround_modifier, unrecognized))
             }
             modifier => {
                 let modifier: u64 = modifier.into();

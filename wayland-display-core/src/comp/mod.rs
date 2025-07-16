@@ -538,14 +538,14 @@ pub(crate) fn init(
                                 VideoInfoTypes::VideoInfo(_) => FormatSet::default(),
                                 VideoInfoTypes::VideoInfoDmaDrm(video_info) => {
                                     let fourcc = gst_video_format_to_drm_fourcc(&video_info);
-                                    let modifier = gst_video_format_to_drm_modifier(&video_info);
+                                    let (modifier, _) = gst_video_format_to_drm_modifier(&video_info).expect(
+                                        "Failed to convert gst_video_format to drm_modifier",
+                                    );
                                     let drm_format = DrmFormat {
                                         code: fourcc.expect(
                                             "Failed to convert gst_video_format to drm_fourcc",
                                         ),
-                                        modifier: modifier.expect(
-                                            "Failed to convert gst_video_format to drm_modifier",
-                                        ),
+                                        modifier,
                                     };
                                     FormatSet::from_iter([drm_format])
                                 }
