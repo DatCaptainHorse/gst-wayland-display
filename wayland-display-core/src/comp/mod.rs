@@ -62,6 +62,8 @@ use std::{
     sync::{Arc, mpsc::Sender},
     time::{Duration, Instant},
 };
+use smithay::backend::vulkan::Instance;
+use smithay::backend::vulkan::version::Version;
 use tracing::debug;
 
 mod focus;
@@ -584,19 +586,21 @@ pub(crate) fn init(
                     let _ = sender.send(supported_formats);
                 }
                 Event::Msg(Command::GetRenderDevice(sender)) => {
-                    let render_device: Option<GPUDevice> = match &state.render_node {
-                        Some(node) => {
+                    /*let render_device: Option<GPUDevice> = match &state.render_node {
+                        /*Some(node) => {
                             if let Ok(gpu_dev) = GPUDevice::try_from(*node) {
                                 Some(gpu_dev)
                             } else {
                                 tracing::warn!("Failed to create GPUDevice from render node.");
                                 None
                             }
-                        }
+                        }*/
                         None => None,
-                    };
-                    debug!("Render device requested: {:?}", render_device);
-                    if let Err(err) = sender.send(render_device) {
+                        _ => None,
+                    };*/
+                    let _ = Instance::new(Version::VERSION_1_1, None);
+                    //debug!("Render device requested: {:?}", render_device);
+                    if let Err(err) = sender.send(None) {
                         tracing::warn!(?err, "Failed to send render device.");
                     }
                 }
