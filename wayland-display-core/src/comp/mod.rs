@@ -589,16 +589,16 @@ pub(crate) fn init(
                             // Check for existence of nvidia-smi, if it runs, return None instead
                             // Done because apparently creating Vulkan instance causes -
                             // EGL to die under NVIDIA GPUs, nice bug.
-                            if std::process::Command::new("nvidia-smi").arg("--help").output().is_ok() {
+                            /*if std::process::Command::new("nvidia-smi").arg("--help").output().is_ok() {
                                 None
-                            } else {
+                            } else {*/
                                 if let Ok(gpu_dev) = GPUDevice::try_from(*node) {
                                     Some(gpu_dev)
                                 } else {
                                     tracing::warn!("Failed to create GPUDevice from render node.");
                                     None
                                 }
-                            }
+                            //}
                         }
                         None => None,
                     };

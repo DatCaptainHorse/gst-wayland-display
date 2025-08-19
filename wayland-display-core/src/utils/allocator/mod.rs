@@ -36,7 +36,10 @@ impl GsGlesbuffer {
                 format,
                 video_info,
             }),
-            Err(_) => None,
+            Err(e) => {
+                tracing::error!("Failed to create GsGlesbuffer: {}", smithay::backend::SwapBuffersError::from(e));
+                None
+            },
         }
     }
 }
@@ -112,7 +115,10 @@ impl GsDmaBuf {
                 video_info,
                 gst_allocator: DmaBufAllocator::new(),
             }),
-            Err(_) => None,
+            Err(e) => {
+                tracing::warn!("Failed to create DMA buffer: {}" , e);
+                None
+            },
         }
     }
 }
