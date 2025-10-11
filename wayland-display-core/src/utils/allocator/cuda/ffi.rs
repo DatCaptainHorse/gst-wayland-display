@@ -9,9 +9,11 @@ use gst::glib::ffi as glib_ffi;
 use gst_video::VideoInfoDmaDrm;
 use gst_video::glib::translate::ToGlibPtr;
 use smithay::backend::egl::ffi::egl::types::{EGLDisplay, EGLImageKHR, EGLint};
+use std::collections::HashMap;
 use std::ffi::c_void;
 use std::os::raw::{c_char, c_int, c_uint};
 use std::ptr;
+use std::sync::{LazyLock, Mutex};
 
 pub(crate) type GstCudaContext = *mut c_void;
 
@@ -364,8 +366,8 @@ struct CudaKernel {
 unsafe impl Send for CudaKernel {}
 unsafe impl Sync for CudaKernel {}
 
-// Load kernel once during initialization
-static COPY_KERNEL: std::sync::OnceLock<CudaKernel> = std::sync::OnceLock::new();
+static COPY_KERNELS: LazyLock<Mutex<HashMap<usize, CudaKernel>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 const NVRTC_SUCCESS: c_int = 0;
 
@@ -395,22 +397,28 @@ unsafe extern "C" {
     fn nvrtcGetErrorString(result: c_int) -> *const c_char;
 }
 
-fn get_copy_kernel() -> Result<CUfunction, String> {
-    tracing::info!("get_copy_kernel called");
+fn get_copy_kernel(cuda_context: &CUDAContext) -> Result<CUfunction, String> {
+    let ctx_key = cuda_context.ptr as usize;
 
-    let kernel = COPY_KERNEL.get_or_init(|| {
-        tracing::info!("Initializing kernel for first time...");
+    let mut kernels = COPY_KERNELS.lock().unwrap();
 
-        // Check error before anything
-        let mut ctx_check: CUcontext = ptr::null_mut();
-        let err_before = unsafe { cuCtxGetCurrent(&mut ctx_check) };
-        tracing::info!(
-            "Error state BEFORE NVRTC: {}",
-            cuda_result_to_string(err_before)
-        );
+    if let Some(kernel) = kernels.get(&ctx_key) {
+        tracing::info!("Using cached kernel for context {:?}", ctx_key);
+        return Ok(kernel.function);
+    }
 
-        // CUDA C source embedded as string
-        let kernel_src = b"
+    tracing::info!("Compiling kernel for new context {:?}", ctx_key);
+
+    // Check error before anything
+    let mut ctx_check: CUcontext = ptr::null_mut();
+    let err_before = unsafe { cuCtxGetCurrent(&mut ctx_check) };
+    tracing::info!(
+        "Error state BEFORE NVRTC: {}",
+        cuda_result_to_string(err_before)
+    );
+
+    // CUDA C source embedded as string
+    let kernel_src = b"
 extern \"C\" __global__ void copy_array_to_linear(
     cudaTextureObject_t src_tex,
     unsigned char* dst,
@@ -434,133 +442,132 @@ extern \"C\" __global__ void copy_array_to_linear(
     }
 }\0";
 
-        // Compile at runtime
-        let mut prog: *mut c_void = ptr::null_mut();
-        let src_name = b"copy_kernel.cu\0";
+    // Compile at runtime
+    let mut prog: *mut c_void = ptr::null_mut();
+    let src_name = b"copy_kernel.cu\0";
 
-        tracing::info!("Creating NVRTC program...");
-        let result = unsafe {
-            nvrtcCreateProgram(
-                &mut prog,
-                kernel_src.as_ptr() as *const c_char,
-                src_name.as_ptr() as *const c_char,
-                0,
-                ptr::null(),
-                ptr::null(),
-            )
-        };
+    tracing::info!("Creating NVRTC program...");
+    let result = unsafe {
+        nvrtcCreateProgram(
+            &mut prog,
+            kernel_src.as_ptr() as *const c_char,
+            src_name.as_ptr() as *const c_char,
+            0,
+            ptr::null(),
+            ptr::null(),
+        )
+    };
 
-        let err_after_create = unsafe { cuCtxGetCurrent(&mut ctx_check) };
-        tracing::info!(
-            "Error state AFTER nvrtcCreateProgram: {}",
-            cuda_result_to_string(err_after_create)
-        );
+    let err_after_create = unsafe { cuCtxGetCurrent(&mut ctx_check) };
+    tracing::info!(
+        "Error state AFTER nvrtcCreateProgram: {}",
+        cuda_result_to_string(err_after_create)
+    );
 
-        if result != NVRTC_SUCCESS {
-            panic!("Failed to create NVRTC program: {}", unsafe {
-                std::ffi::CStr::from_ptr(nvrtcGetErrorString(result)).to_string_lossy()
-            });
+    if result != NVRTC_SUCCESS {
+        panic!("Failed to create NVRTC program: {}", unsafe {
+            std::ffi::CStr::from_ptr(nvrtcGetErrorString(result)).to_string_lossy()
+        });
+    }
+
+    tracing::info!("Compiling NVRTC program...");
+    // Compile with compute capability detection
+    let result = unsafe { nvrtcCompileProgram(prog, 0, ptr::null()) };
+
+    let err_after_compile = unsafe { cuCtxGetCurrent(&mut ctx_check) };
+    tracing::info!(
+        "Error state AFTER nvrtcCompileProgram: {}",
+        cuda_result_to_string(err_after_compile)
+    );
+
+    if result != NVRTC_SUCCESS {
+        // Get compilation log
+        let mut log_size: usize = 0;
+        let mut log: Vec<u8> = Vec::new();
+
+        // NVRTC has nvrtcGetProgramLogSize and nvrtcGetProgramLog
+        unsafe extern "C" {
+            fn nvrtcGetProgramLogSize(prog: *mut c_void, logSizeRet: *mut usize) -> c_int;
+            fn nvrtcGetProgramLog(prog: *mut c_void, log: *mut c_char) -> c_int;
         }
 
-        tracing::info!("Compiling NVRTC program...");
-        // Compile with compute capability detection
-        let result = unsafe { nvrtcCompileProgram(prog, 0, ptr::null()) };
-
-        let err_after_compile = unsafe { cuCtxGetCurrent(&mut ctx_check) };
-        tracing::info!(
-            "Error state AFTER nvrtcCompileProgram: {}",
-            cuda_result_to_string(err_after_compile)
-        );
-
-        if result != NVRTC_SUCCESS {
-            // Get compilation log
-            let mut log_size: usize = 0;
-            let mut log: Vec<u8> = Vec::new();
-
-            // NVRTC has nvrtcGetProgramLogSize and nvrtcGetProgramLog
-            unsafe extern "C" {
-                fn nvrtcGetProgramLogSize(prog: *mut c_void, logSizeRet: *mut usize) -> c_int;
-                fn nvrtcGetProgramLog(prog: *mut c_void, log: *mut c_char) -> c_int;
-            }
-
+        unsafe {
+            nvrtcGetProgramLogSize(prog, &mut log_size);
+        }
+        if log_size > 0 {
+            log.resize(log_size, 0);
             unsafe {
-                nvrtcGetProgramLogSize(prog, &mut log_size);
+                nvrtcGetProgramLog(prog, log.as_mut_ptr() as *mut c_char);
             }
-            if log_size > 0 {
-                log.resize(log_size, 0);
-                unsafe {
-                    nvrtcGetProgramLog(prog, log.as_mut_ptr() as *mut c_char);
-                }
-                eprintln!("NVRTC compilation log:\n{}", String::from_utf8_lossy(&log));
-            }
-
-            panic!("Failed to compile kernel: {}", unsafe {
-                std::ffi::CStr::from_ptr(nvrtcGetErrorString(result)).to_string_lossy()
-            });
+            eprintln!("NVRTC compilation log:\n{}", String::from_utf8_lossy(&log));
         }
 
-        // Get PTX
-        let mut ptx_size: usize = 0;
-        unsafe {
-            nvrtcGetPTXSize(prog, &mut ptx_size);
-        }
+        panic!("Failed to compile kernel: {}", unsafe {
+            std::ffi::CStr::from_ptr(nvrtcGetErrorString(result)).to_string_lossy()
+        });
+    }
 
-        let mut ptx = vec![0u8; ptx_size];
-        unsafe {
-            nvrtcGetPTX(prog, ptx.as_mut_ptr() as *mut c_char);
-        }
+    // Get PTX
+    let mut ptx_size: usize = 0;
+    unsafe {
+        nvrtcGetPTXSize(prog, &mut ptx_size);
+    }
 
-        unsafe {
-            nvrtcDestroyProgram(&mut prog);
-        }
+    let mut ptx = vec![0u8; ptx_size];
+    unsafe {
+        nvrtcGetPTX(prog, ptx.as_mut_ptr() as *mut c_char);
+    }
 
-        tracing::info!("Loading PTX...");
+    unsafe {
+        nvrtcDestroyProgram(&mut prog);
+    }
 
-        // Load PTX into CUDA
-        let mut module: CUmodule = ptr::null_mut();
-        let load_result = unsafe { cuModuleLoadData(&mut module, ptx.as_ptr() as *const c_void) };
+    tracing::info!("Loading PTX...");
 
-        let err_after_load = unsafe { cuCtxGetCurrent(&mut ctx_check) };
-        tracing::info!(
-            "cuModuleLoadData result: {} (code: {})",
-            cuda_result_to_string(load_result),
-            load_result
-        );
-        tracing::info!(
-            "Error state AFTER cuModuleLoadData: {}",
-            cuda_result_to_string(err_after_load)
-        );
+    // Load PTX into CUDA
+    let mut module: CUmodule = ptr::null_mut();
+    let load_result = unsafe { cuModuleLoadData(&mut module, ptx.as_ptr() as *const c_void) };
 
-        tracing::info!("Getting kernel function...");
-        let mut function: CUfunction = ptr::null_mut();
-        let func_name = b"copy_array_to_linear\0";
-        let func_result = unsafe {
-            cuModuleGetFunction(&mut function, module, func_name.as_ptr() as *const c_char)
-        };
+    let err_after_load = unsafe { cuCtxGetCurrent(&mut ctx_check) };
+    tracing::info!(
+        "cuModuleLoadData result: {} (code: {})",
+        cuda_result_to_string(load_result),
+        load_result
+    );
+    tracing::info!(
+        "Error state AFTER cuModuleLoadData: {}",
+        cuda_result_to_string(err_after_load)
+    );
 
-        let err_after_getfunc = unsafe { cuCtxGetCurrent(&mut ctx_check) };
-        tracing::info!(
-            "cuModuleGetFunction result: {} (code: {})",
+    tracing::info!("Getting kernel function...");
+    let mut function: CUfunction = ptr::null_mut();
+    let func_name = b"copy_array_to_linear\0";
+    let func_result =
+        unsafe { cuModuleGetFunction(&mut function, module, func_name.as_ptr() as *const c_char) };
+
+    let err_after_getfunc = unsafe { cuCtxGetCurrent(&mut ctx_check) };
+    tracing::info!(
+        "cuModuleGetFunction result: {} (code: {})",
+        cuda_result_to_string(func_result),
+        func_result
+    );
+    tracing::info!(
+        "Error state AFTER cuModuleGetFunction: {}",
+        cuda_result_to_string(err_after_getfunc)
+    );
+
+    if func_result != CUDA_SUCCESS {
+        panic!(
+            "Failed to get kernel function: {} (code: {})",
             cuda_result_to_string(func_result),
             func_result
         );
-        tracing::info!(
-            "Error state AFTER cuModuleGetFunction: {}",
-            cuda_result_to_string(err_after_getfunc)
-        );
+    }
 
-        if func_result != CUDA_SUCCESS {
-            panic!(
-                "Failed to get kernel function: {} (code: {})",
-                cuda_result_to_string(func_result),
-                func_result
-            );
-        }
+    let kernel = CudaKernel { module, function };
+    kernels.insert(ctx_key, kernel);
 
-        CudaKernel { module, function }
-    });
-
-    Ok(kernel.function)
+    Ok(function)
 }
 
 pub(crate) fn alloc_copy_gst_memory(
@@ -779,7 +786,7 @@ pub(crate) fn alloc_copy_gst_memory(
             );
 
             // Launch kernel
-            let kernel = get_copy_kernel()?;
+            let kernel = get_copy_kernel(&cuda_context)?;
             let block_dim = (16, 16);
             let grid_dim = (
                 (width + block_dim.0 - 1) / block_dim.0,
