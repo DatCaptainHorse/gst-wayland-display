@@ -20,7 +20,11 @@ macro_rules! cuda_call {
     ($expression:expr) => {{
         let result = unsafe { $expression };
         if result != CUDA_SUCCESS {
-            Err(format!("CUDA error: {}", cuda_result_to_string(result)))
+            Err(format!(
+                "CUDA error: {} (code: {})",
+                cuda_result_to_string(result),
+                result
+            ))
         } else {
             Ok(())
         }
@@ -171,6 +175,7 @@ unsafe extern "C" {
         extra: *mut *mut c_void,
     ) -> CUresult;
 
+    fn cuCtxGetCurrent(pctx: *mut CUcontext) -> CUresult;
 }
 
 fn gst_dma_video_info_to_video_info(
@@ -644,6 +649,15 @@ pub(crate) fn alloc_copy_gst_memory(
                 &dst_pitch as *const _ as *mut c_void,
             ];
 
+            // Before launching kernel, check for sticky errors
+            tracing::info!("Checking for previous CUDA errors...");
+            unsafe {
+                let error = cuCtxGetCurrent(ptr::null_mut());
+                if error != CUDA_SUCCESS {
+                    tracing::error!("Previous CUDA error detected: {}", cuda_result_to_string(error));
+                }
+            }
+
             tracing::info!("Launching kernel...");
             match cuda_call!(cuLaunchKernel(
                 kernel,
@@ -746,15 +760,64 @@ pub(crate) fn alloc_copy_gst_memory(
 
 pub(crate) fn cuda_result_to_string(result: CUresult) -> &'static str {
     match result {
-        CUDA_SUCCESS => "CUDA_SUCCESS",
+        0 => "CUDA_SUCCESS",
         1 => "CUDA_ERROR_INVALID_VALUE",
         2 => "CUDA_ERROR_OUT_OF_MEMORY",
         3 => "CUDA_ERROR_NOT_INITIALIZED",
         4 => "CUDA_ERROR_DEINITIALIZED",
+        5 => "CUDA_ERROR_PROFILER_DISABLED",
+        6 => "CUDA_ERROR_PROFILER_NOT_INITIALIZED",
+        7 => "CUDA_ERROR_PROFILER_ALREADY_STARTED",
+        8 => "CUDA_ERROR_PROFILER_ALREADY_STOPPED",
         100 => "CUDA_ERROR_NO_DEVICE",
         101 => "CUDA_ERROR_INVALID_DEVICE",
         200 => "CUDA_ERROR_INVALID_IMAGE",
         201 => "CUDA_ERROR_INVALID_CONTEXT",
-        _ => "CUDA_ERROR_UNKNOWN",
+        202 => "CUDA_ERROR_CONTEXT_ALREADY_CURRENT",
+        205 => "CUDA_ERROR_MAP_FAILED",
+        206 => "CUDA_ERROR_UNMAP_FAILED",
+        207 => "CUDA_ERROR_ARRAY_IS_MAPPED",
+        208 => "CUDA_ERROR_ALREADY_MAPPED",
+        209 => "CUDA_ERROR_NO_BINARY_FOR_GPU",
+        210 => "CUDA_ERROR_ALREADY_ACQUIRED",
+        211 => "CUDA_ERROR_NOT_MAPPED",
+        212 => "CUDA_ERROR_NOT_MAPPED_AS_ARRAY",
+        213 => "CUDA_ERROR_NOT_MAPPED_AS_POINTER",
+        214 => "CUDA_ERROR_ECC_UNCORRECTABLE",
+        215 => "CUDA_ERROR_UNSUPPORTED_LIMIT",
+        216 => "CUDA_ERROR_CONTEXT_ALREADY_IN_USE",
+        217 => "CUDA_ERROR_PEER_ACCESS_UNSUPPORTED",
+        218 => "CUDA_ERROR_INVALID_PTX",
+        219 => "CUDA_ERROR_INVALID_GRAPHICS_CONTEXT",
+        300 => "CUDA_ERROR_INVALID_SOURCE",
+        301 => "CUDA_ERROR_FILE_NOT_FOUND",
+        302 => "CUDA_ERROR_SHARED_OBJECT_SYMBOL_NOT_FOUND",
+        303 => "CUDA_ERROR_SHARED_OBJECT_INIT_FAILED",
+        304 => "CUDA_ERROR_OPERATING_SYSTEM",
+        400 => "CUDA_ERROR_INVALID_HANDLE",
+        500 => "CUDA_ERROR_NOT_FOUND",
+        600 => "CUDA_ERROR_NOT_READY",
+        700 => "CUDA_ERROR_ILLEGAL_ADDRESS",
+        701 => "CUDA_ERROR_LAUNCH_OUT_OF_RESOURCES",
+        702 => "CUDA_ERROR_LAUNCH_TIMEOUT",
+        703 => "CUDA_ERROR_LAUNCH_INCOMPATIBLE_TEXTURING",
+        704 => "CUDA_ERROR_PEER_ACCESS_ALREADY_ENABLED",
+        705 => "CUDA_ERROR_PEER_ACCESS_NOT_ENABLED",
+        708 => "CUDA_ERROR_PRIMARY_CONTEXT_ACTIVE",
+        709 => "CUDA_ERROR_CONTEXT_IS_DESTROYED",
+        710 => "CUDA_ERROR_ASSERT",
+        711 => "CUDA_ERROR_TOO_MANY_PEERS",
+        712 => "CUDA_ERROR_HOST_MEMORY_ALREADY_REGISTERED",
+        713 => "CUDA_ERROR_HOST_MEMORY_NOT_REGISTERED",
+        714 => "CUDA_ERROR_HARDWARE_STACK_ERROR",
+        715 => "CUDA_ERROR_ILLEGAL_INSTRUCTION",
+        716 => "CUDA_ERROR_MISALIGNED_ADDRESS",
+        717 => "CUDA_ERROR_INVALID_ADDRESS_SPACE",
+        718 => "CUDA_ERROR_INVALID_PC",
+        719 => "CUDA_ERROR_LAUNCH_FAILED",
+        800 => "CUDA_ERROR_NOT_PERMITTED",
+        801 => "CUDA_ERROR_NOT_SUPPORTED",
+        999 => "CUDA_ERROR_UNKNOWN",
+        _ => "CUDA_ERROR_UNKNOWN_CODE",
     }
 }
