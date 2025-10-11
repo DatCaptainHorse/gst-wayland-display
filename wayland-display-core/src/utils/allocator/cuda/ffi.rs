@@ -358,8 +358,8 @@ unsafe extern "C" {
 fn get_copy_kernel() -> Result<CUfunction, String> {
     let kernel = COPY_KERNEL.get_or_init(|| {
         // CUDA C source embedded as string
-        let kernel_src = br#"
-extern "C" __global__ void copy_array_to_linear(
+        let kernel_src = b"
+extern \"C\" __global__ void copy_array_to_linear(
     cudaTextureObject_t src_tex,
     unsigned char* dst,
     int width,
@@ -377,8 +377,7 @@ extern "C" __global__ void copy_array_to_linear(
         dst[dst_idx + 2] = pixel.z;
         dst[dst_idx + 3] = pixel.w;
     }
-}
-"#;
+}\0";
 
         // Compile at runtime
         let mut prog: *mut c_void = ptr::null_mut();
