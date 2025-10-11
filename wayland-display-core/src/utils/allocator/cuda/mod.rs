@@ -4,7 +4,7 @@ use ffi::{GstCudaContext, PFN_eglDestroyImageKHR, eglGetProcAddress};
 use gst::glib::ffi as glib_ffi;
 use gst::glib::translate::ToGlibPtr;
 use gst::query::Allocation;
-use gst::{Buffer as GstBuffer, BufferPool, Element, QueryRef};
+use gst::{Buffer as GstBuffer, Element, QueryRef};
 use gst_video::{VideoFormat, VideoInfoDmaDrm, VideoMeta};
 use smithay::backend::allocator::Buffer;
 use smithay::backend::allocator::dmabuf::Dmabuf;

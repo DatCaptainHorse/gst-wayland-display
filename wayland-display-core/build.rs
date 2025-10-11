@@ -32,6 +32,7 @@ fn main() {
 
     println!("cargo:rustc-link-lib=cuda");
     println!("cargo:rustc-link-lib=cudart");
+    println!("cargo:rustc-link-lib=nvrtc");
 
     // Link EGL
     println!("cargo:rustc-link-lib=EGL");

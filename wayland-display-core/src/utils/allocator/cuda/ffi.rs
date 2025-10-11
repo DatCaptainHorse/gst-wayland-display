@@ -327,12 +327,108 @@ unsafe impl Sync for CudaKernel {}
 // Load kernel once during initialization
 static COPY_KERNEL: std::sync::OnceLock<CudaKernel> = std::sync::OnceLock::new();
 
+const NVRTC_SUCCESS: c_int = 0;
+
+#[link(name = "nvrtc")]
+unsafe extern "C" {
+    fn nvrtcCreateProgram(
+        prog: *mut *mut c_void,
+        src: *const c_char,
+        name: *const c_char,
+        numHeaders: c_int,
+        headers: *const *const c_char,
+        includeNames: *const *const c_char,
+    ) -> c_int;
+
+    fn nvrtcCompileProgram(
+        prog: *mut c_void,
+        numOptions: c_int,
+        options: *const *const c_char,
+    ) -> c_int;
+
+    fn nvrtcGetPTXSize(prog: *mut c_void, ptxSizeRet: *mut usize) -> c_int;
+
+    fn nvrtcGetPTX(prog: *mut c_void, ptx: *mut c_char) -> c_int;
+
+    fn nvrtcDestroyProgram(prog: *mut *mut c_void) -> c_int;
+
+    fn nvrtcGetErrorString(result: c_int) -> *const c_char;
+}
+
 fn get_copy_kernel() -> Result<CUfunction, String> {
     let kernel = COPY_KERNEL.get_or_init(|| {
-        let ptx = include_bytes!("copy_kernel.ptx");
+        // CUDA C source embedded as string
+        let kernel_src = br#"
+extern "C" __global__ void copy_array_to_linear(
+    cudaTextureObject_t src_tex,
+    unsigned char* dst,
+    int width,
+    int height,
+    int dst_pitch
+) {
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    
+    if (x < width && y < height) {
+        uchar4 pixel = tex2D<uchar4>(src_tex, x + 0.5f, y + 0.5f);
+        int dst_idx = y * dst_pitch + x * 4;
+        dst[dst_idx + 0] = pixel.x;
+        dst[dst_idx + 1] = pixel.y;
+        dst[dst_idx + 2] = pixel.z;
+        dst[dst_idx + 3] = pixel.w;
+    }
+}
+"#;
+
+        // Compile at runtime
+        let mut prog: *mut c_void = ptr::null_mut();
+        let src_name = b"copy_kernel.cu\0";
+
+        let result = unsafe {
+            nvrtcCreateProgram(
+                &mut prog,
+                kernel_src.as_ptr() as *const c_char,
+                src_name.as_ptr() as *const c_char,
+                0,
+                ptr::null(),
+                ptr::null(),
+            )
+        };
+
+        if result != NVRTC_SUCCESS {
+            panic!("Failed to create NVRTC program: {}", unsafe {
+                std::ffi::CStr::from_ptr(nvrtcGetErrorString(result)).to_string_lossy()
+            });
+        }
+
+        // Compile with compute capability detection
+        let result = unsafe { nvrtcCompileProgram(prog, 0, ptr::null()) };
+
+        if result != NVRTC_SUCCESS {
+            panic!("Failed to compile kernel: {}", unsafe {
+                std::ffi::CStr::from_ptr(nvrtcGetErrorString(result)).to_string_lossy()
+            });
+        }
+
+        // Get PTX
+        let mut ptx_size: usize = 0;
+        unsafe {
+            nvrtcGetPTXSize(prog, &mut ptx_size);
+        }
+
+        let mut ptx = vec![0u8; ptx_size];
+        unsafe {
+            nvrtcGetPTX(prog, ptx.as_mut_ptr() as *mut c_char);
+        }
+
+        unsafe {
+            nvrtcDestroyProgram(&mut prog);
+        }
+
+        // Load PTX into CUDA
         let mut module: CUmodule = ptr::null_mut();
         cuda_call!(cuModuleLoadData(&mut module, ptx.as_ptr() as *const c_void))
-            .expect("Failed to load PTX module");
+            .expect("Failed to load compiled PTX");
 
         let mut function: CUfunction = ptr::null_mut();
         let func_name = b"copy_array_to_linear\0";
