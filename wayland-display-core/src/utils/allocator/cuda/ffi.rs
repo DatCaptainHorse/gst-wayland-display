@@ -144,6 +144,12 @@ unsafe extern "C" {
         flags: c_uint,
     ) -> CUresult;
 
+    pub(crate) fn cuGraphicsUnmapResources(
+        count: c_uint,
+        resources: *mut CUgraphicsResource,
+        stream: CUstream,
+    ) -> CUresult;
+
     pub(crate) fn cuGraphicsUnregisterResource(resource: CUgraphicsResource) -> CUresult;
 
     pub(crate) fn cuGraphicsResourceGetMappedEglFrame(

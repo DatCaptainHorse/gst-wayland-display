@@ -488,6 +488,14 @@ impl CUDAImage {
 impl Drop for CUDAImage {
     fn drop(&mut self) {
         unsafe {
+            // Unmap before unregister (if it was ever mapped)
+            // This might fail if not mapped, but that's ok
+            let _ = ffi::cuGraphicsUnmapResources(
+                1,
+                &self.cuda_graphic_resource as *const _ as *mut _,
+                ptr::null_mut()
+            );
+
             ffi::cuGraphicsUnregisterResource(self.cuda_graphic_resource);
         }
     }
