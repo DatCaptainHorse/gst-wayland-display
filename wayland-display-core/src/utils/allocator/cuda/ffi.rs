@@ -310,9 +310,30 @@ pub(crate) struct CudaContextGuard;
 
 impl CudaContextGuard {
     pub fn new(cuda_context: &CUDAContext) -> Result<Self, String> {
+        // CHECK BEFORE PUSH
+        unsafe {
+            let mut dummy_ctx: CUcontext = ptr::null_mut();
+            let err = cuCtxGetCurrent(&mut dummy_ctx);
+            tracing::info!(
+                "BEFORE gst_cuda_context_push, error state: {}",
+                cuda_result_to_string(err)
+            );
+        }
+
         if unsafe { gst_cuda_context_push(cuda_context.ptr) } == glib_ffi::GFALSE {
             return Err("Failed to push CUDA context".into());
         }
+
+        // CHECK AFTER PUSH
+        unsafe {
+            let mut dummy_ctx: CUcontext = ptr::null_mut();
+            let err = cuCtxGetCurrent(&mut dummy_ctx);
+            tracing::info!(
+                "AFTER gst_cuda_context_push, error state: {}",
+                cuda_result_to_string(err)
+            );
+        }
+
         Ok(CudaContextGuard)
     }
 }
@@ -550,7 +571,27 @@ pub(crate) fn alloc_copy_gst_memory(
         (gst_memory, stream)
     };
 
+    // CHECK 1: After getting stream
+    unsafe {
+        let mut dummy_ctx: CUcontext = ptr::null_mut();
+        let err = cuCtxGetCurrent(&mut dummy_ctx);
+        tracing::info!(
+            "After getting stream, error state: {}",
+            cuda_result_to_string(err)
+        );
+    }
+
     let stream_handle = unsafe { gst_cuda_stream_get_handle(stream) };
+
+    // CHECK 2: After gst_cuda_stream_get_handle
+    unsafe {
+        let mut dummy_ctx: CUcontext = ptr::null_mut();
+        let err = cuCtxGetCurrent(&mut dummy_ctx);
+        tracing::info!(
+            "After gst_cuda_stream_get_handle, error state: {}",
+            cuda_result_to_string(err)
+        );
+    }
 
     // Map the GStreamer memory to get destination device pointer
     let mut map_info: gst_ffi::GstMapInfo = unsafe { std::mem::zeroed() };
@@ -562,6 +603,16 @@ pub(crate) fn alloc_copy_gst_memory(
         )
     };
 
+    // CHECK 3: After memory map
+    unsafe {
+        let mut dummy_ctx: CUcontext = ptr::null_mut();
+        let err = cuCtxGetCurrent(&mut dummy_ctx);
+        tracing::info!(
+            "After gst_memory_map, error state: {}",
+            cuda_result_to_string(err)
+        );
+    }
+
     if map_success == glib_ffi::GFALSE {
         unsafe { gst_ffi::gst_memory_unref(gst_memory) };
         return Err("Failed to map GStreamer CUDA memory".into());
@@ -571,6 +622,16 @@ pub(crate) fn alloc_copy_gst_memory(
 
     // Copy from EGL frame to GStreamer memory for each plane
     let _cuda_context_guard = CudaContextGuard::new(cuda_context)?;
+
+    // CHECK 4: After context guard (push)
+    unsafe {
+        let mut dummy_ctx: CUcontext = ptr::null_mut();
+        let err = cuCtxGetCurrent(&mut dummy_ctx);
+        tracing::info!(
+            "After CudaContextGuard::new (context push), error state: {}",
+            cuda_result_to_string(err)
+        );
+    }
 
     for plane in 0..egl_frame.plane_count as usize {
         tracing::info!(
