@@ -373,7 +373,7 @@ extern \"C\" __global__ void copy_array_to_linear(
         // Use float4 and normalize, works for any internal format
         float4 pixel = tex2D<float4>(src_tex, (float)x + 0.5f, (float)y + 0.5f);
         int dst_idx = y * dst_pitch + x * 4;
-        
+
         // Convert from [0,1] to [0,255]
         dst[dst_idx + 0] = (unsigned char)(__saturatef(pixel.x) * 255.0f);
         dst[dst_idx + 1] = (unsigned char)(__saturatef(pixel.y) * 255.0f);
@@ -477,8 +477,11 @@ pub(crate) fn alloc_copy_gst_memory(
     let mut video_info = gst_dma_video_info_to_video_info(&dma_video_info)?;
 
     let (gst_memory, stream) = if let Some(pool) = buffer_pool {
+        tracing::info!("Acquiring buffer from pool...");
+
         // Acquire buffer from pool
         let mut gst_buffer: *mut gst_ffi::GstBuffer = ptr::null_mut();
+        let start = std::time::Instant::now();
         let result = unsafe {
             gst::ffi::gst_buffer_pool_acquire_buffer(
                 pool as *mut gst::ffi::GstBufferPool,
@@ -486,6 +489,8 @@ pub(crate) fn alloc_copy_gst_memory(
                 ptr::null_mut(),
             )
         };
+
+        tracing::info!("Buffer acquired in {:?}, result: {}", start.elapsed(), result);
 
         if result != gst_ffi::GST_FLOW_OK {
             return Err(format!("Failed to acquire buffer from pool: {}", result).into());

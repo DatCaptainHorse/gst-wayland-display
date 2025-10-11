@@ -531,7 +531,7 @@ impl BaseSrcImpl for WaylandDisplaySrc {
             tracing::info!("No allocation pools, creating one");
             let video_info = VideoInfo::from_caps(outcaps.unwrap())?;
             let size = video_info.size() as u32;
-            (CUDABufferPool::new(&cuda_ctx), false, size, 0, 0)
+            (CUDABufferPool::new(&cuda_ctx), false, size, 4, 16)
         } else {
             tracing::info!("Using existing allocation pools");
             let (_pool, size, min, max) = pools.get(0).unwrap();

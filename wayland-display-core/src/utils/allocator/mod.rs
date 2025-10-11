@@ -612,8 +612,8 @@ mod tests {
                     .stream()
                     .expect("Cuda context without a stream"),
                 drm_video_info.size() as u32,
-                0,
-                0,
+                4,
+                16,
             )
             .expect("Failed to configure buffer pool");
         buffer_pool
