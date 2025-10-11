@@ -389,7 +389,19 @@ unsafe extern "C" {
 }
 
 fn get_copy_kernel() -> Result<CUfunction, String> {
+    tracing::info!("get_copy_kernel called");
+
     let kernel = COPY_KERNEL.get_or_init(|| {
+        tracing::info!("Initializing kernel for first time...");
+
+        // Check error before anything
+        let mut ctx_check: CUcontext = ptr::null_mut();
+        let err_before = unsafe { cuCtxGetCurrent(&mut ctx_check) };
+        tracing::info!(
+            "Error state BEFORE NVRTC: {}",
+            cuda_result_to_string(err_before)
+        );
+
         // CUDA C source embedded as string
         let kernel_src = b"
 extern \"C\" __global__ void copy_array_to_linear(
@@ -419,6 +431,7 @@ extern \"C\" __global__ void copy_array_to_linear(
         let mut prog: *mut c_void = ptr::null_mut();
         let src_name = b"copy_kernel.cu\0";
 
+        tracing::info!("Creating NVRTC program...");
         let result = unsafe {
             nvrtcCreateProgram(
                 &mut prog,
@@ -430,14 +443,27 @@ extern \"C\" __global__ void copy_array_to_linear(
             )
         };
 
+        let err_after_create = unsafe { cuCtxGetCurrent(&mut ctx_check) };
+        tracing::info!(
+            "Error state AFTER nvrtcCreateProgram: {}",
+            cuda_result_to_string(err_after_create)
+        );
+
         if result != NVRTC_SUCCESS {
             panic!("Failed to create NVRTC program: {}", unsafe {
                 std::ffi::CStr::from_ptr(nvrtcGetErrorString(result)).to_string_lossy()
             });
         }
 
+        tracing::info!("Compiling NVRTC program...");
         // Compile with compute capability detection
         let result = unsafe { nvrtcCompileProgram(prog, 0, ptr::null()) };
+
+        let err_after_compile = unsafe { cuCtxGetCurrent(&mut ctx_check) };
+        tracing::info!(
+            "Error state AFTER nvrtcCompileProgram: {}",
+            cuda_result_to_string(err_after_compile)
+        );
 
         if result != NVRTC_SUCCESS {
             // Get compilation log
@@ -481,10 +507,22 @@ extern \"C\" __global__ void copy_array_to_linear(
             nvrtcDestroyProgram(&mut prog);
         }
 
+        tracing::info!("Loading PTX...");
+
         // Load PTX into CUDA
         let mut module: CUmodule = ptr::null_mut();
-        cuda_call!(cuModuleLoadData(&mut module, ptx.as_ptr() as *const c_void))
-            .expect("Failed to load compiled PTX");
+        let load_result = unsafe { cuModuleLoadData(&mut module, ptx.as_ptr() as *const c_void) };
+
+        let err_after_load = unsafe { cuCtxGetCurrent(&mut ctx_check) };
+        tracing::info!(
+            "cuModuleLoadData result: {} (code: {})",
+            cuda_result_to_string(load_result),
+            load_result
+        );
+        tracing::info!(
+            "Error state AFTER cuModuleLoadData: {}",
+            cuda_result_to_string(err_after_load)
+        );
 
         let mut function: CUfunction = ptr::null_mut();
         let func_name = b"copy_array_to_linear\0";
