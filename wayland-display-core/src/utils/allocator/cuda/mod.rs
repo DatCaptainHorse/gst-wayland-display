@@ -434,6 +434,8 @@ impl CUDAImage {
         cuda_context: &CUDAContext,
         buffer_pool: &Option<CUDABufferPool>,
     ) -> Result<GstBuffer, Box<dyn std::error::Error>> {
+        tracing::info!("to_gst_buffer called with pool: {}", buffer_pool.is_some());
+        
         let _cuda_context_guard = ffi::CudaContextGuard::new(cuda_context)?;
 
         let mut egl_frame = unsafe { std::mem::zeroed() };

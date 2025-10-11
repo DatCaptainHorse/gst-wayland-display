@@ -478,10 +478,8 @@ pub(crate) fn alloc_copy_gst_memory(
 
     let (gst_memory, stream) = if let Some(pool) = buffer_pool {
         tracing::info!("Acquiring buffer from pool...");
-
-        // Acquire buffer from pool
         let mut gst_buffer: *mut gst_ffi::GstBuffer = ptr::null_mut();
-        let start = std::time::Instant::now();
+
         let result = unsafe {
             gst::ffi::gst_buffer_pool_acquire_buffer(
                 pool as *mut gst::ffi::GstBufferPool,
@@ -490,9 +488,18 @@ pub(crate) fn alloc_copy_gst_memory(
             )
         };
 
-        tracing::info!("Buffer acquired in {:?}, result: {}", start.elapsed(), result);
+        tracing::info!(
+            "Pool acquire result: {} (GST_FLOW_OK={})",
+            result,
+            gst_ffi::GST_FLOW_OK
+        );
 
         if result != gst_ffi::GST_FLOW_OK {
+            // Check pool state
+            let is_active = unsafe {
+                gst::ffi::gst_buffer_pool_is_active(pool as *mut gst::ffi::GstBufferPool)
+            };
+            tracing::error!("Pool acquire failed! Pool active: {}", is_active != 0);
             return Err(format!("Failed to acquire buffer from pool: {}", result).into());
         }
 
