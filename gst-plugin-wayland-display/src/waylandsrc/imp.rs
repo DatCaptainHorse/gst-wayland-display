@@ -555,9 +555,6 @@ impl BaseSrcImpl for WaylandDisplaySrc {
                 let updated_size = pool.get_updated_size().expect("failed to get updated size");
                 tracing::info!("Configured CUDA buffer pool");
 
-                pool.activate().expect("failed to activate CUDA pool");
-                tracing::info!("Activated CUDA buffer pool");
-
                 // This will update the query and activate the pool internally
                 if update_pool {
                     pool.set_nth_allocation_pool(query, 0, updated_size, min, max);
