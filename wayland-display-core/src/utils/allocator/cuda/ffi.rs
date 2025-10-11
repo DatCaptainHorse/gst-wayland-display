@@ -76,9 +76,15 @@ const CU_TR_ADDRESS_MODE_CLAMP: c_uint = 1;
 
 #[repr(C)]
 struct CUDA_RESOURCE_DESC {
-    resType: c_uint, // CU_RESOURCE_TYPE_ARRAY = 0
+    resType: c_uint,
+    res: CUDA_RESOURCE_DESC_RES,
+    flags: c_uint,
+}
+
+#[repr(C)]
+union CUDA_RESOURCE_DESC_RES {
     array: CUarray,
-    _padding: [u64; 15], // Ensure correct size
+    _padding: [u64; 16], // Large enough for any union member
 }
 
 #[repr(C)]
@@ -91,7 +97,8 @@ struct CUDA_TEXTURE_DESC {
     mipmapLevelBias: f32,
     minMipmapLevelClamp: f32,
     maxMipmapLevelClamp: f32,
-    _padding: [u32; 16],
+    borderColor: [f32; 4],
+    _reserved: [c_int; 12],
 }
 
 // CUDA constants
@@ -580,8 +587,8 @@ pub(crate) fn alloc_copy_gst_memory(
             // Create texture object from CUDA array
             let res_desc = CUDA_RESOURCE_DESC {
                 resType: 0, // CU_RESOURCE_TYPE_ARRAY
-                array: src_array,
-                _padding: [0; 15],
+                res: CUDA_RESOURCE_DESC_RES { array: src_array },
+                flags: 0,
             };
 
             let tex_desc = CUDA_TEXTURE_DESC {
@@ -593,23 +600,29 @@ pub(crate) fn alloc_copy_gst_memory(
                 mipmapLevelBias: 0.0,
                 minMipmapLevelClamp: 0.0,
                 maxMipmapLevelClamp: 0.0,
-                _padding: [0; 16],
+                borderColor: [0.0; 4],
+                _reserved: [0; 12],
             };
 
             tracing::info!("Creating texture object...");
             let mut tex_obj: CUtexObject = 0;
-            match cuda_call!(cuTexObjectCreate(
-                &mut tex_obj,
-                &res_desc,
-                &tex_desc,
-                ptr::null()
-            )) {
-                Ok(_) => tracing::info!("Texture object created: {}", tex_obj),
-                Err(e) => {
-                    tracing::error!("cuTexObjectCreate failed: {}", e);
-                    return Err(e.into());
-                }
+            let tex_result =
+                unsafe { cuTexObjectCreate(&mut tex_obj, &res_desc, &tex_desc, ptr::null()) };
+
+            if tex_result != CUDA_SUCCESS {
+                tracing::error!(
+                    "cuTexObjectCreate failed: {} (code: {})",
+                    cuda_result_to_string(tex_result),
+                    tex_result
+                );
+                return Err(format!(
+                    "Failed to create texture object: {} (code: {})",
+                    cuda_result_to_string(tex_result),
+                    tex_result
+                )
+                .into());
             }
+            tracing::info!("Texture object created: {}", tex_obj);
 
             // Get destination pointer
             let dst_ptr = dst_device_ptr + video_info.offset[plane] as u64;
@@ -654,7 +667,10 @@ pub(crate) fn alloc_copy_gst_memory(
             unsafe {
                 let error = cuCtxGetCurrent(ptr::null_mut());
                 if error != CUDA_SUCCESS {
-                    tracing::error!("Previous CUDA error detected: {}", cuda_result_to_string(error));
+                    tracing::error!(
+                        "Previous CUDA error detected: {}",
+                        cuda_result_to_string(error)
+                    );
                 }
             }
 
