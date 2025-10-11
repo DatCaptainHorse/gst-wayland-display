@@ -546,9 +546,16 @@ pub(crate) fn alloc_copy_gst_memory(
     let _cuda_context_guard = CudaContextGuard::new(cuda_context)?;
 
     for plane in 0..egl_frame.plane_count as usize {
+        tracing::info!(
+            "Processing plane {}, frame_type: {}",
+            plane,
+            egl_frame.frame_type
+        );
+
         if egl_frame.frame_type == 0 {
             // Array type - use GPU kernel for detiling
             let src_array = unsafe { egl_frame.frame.p_array[plane] };
+            tracing::info!("src_array ptr: {:?}", src_array);
 
             // Create texture object from CUDA array
             let res_desc = CUDA_RESOURCE_DESC {
@@ -569,13 +576,20 @@ pub(crate) fn alloc_copy_gst_memory(
                 _padding: [0; 16],
             };
 
+            tracing::info!("Creating texture object...");
             let mut tex_obj: CUtexObject = 0;
-            cuda_call!(cuTexObjectCreate(
+            match cuda_call!(cuTexObjectCreate(
                 &mut tex_obj,
                 &res_desc,
                 &tex_desc,
                 ptr::null()
-            ))?;
+            )) {
+                Ok(_) => tracing::info!("Texture object created: {}", tex_obj),
+                Err(e) => {
+                    tracing::error!("cuTexObjectCreate failed: {}", e);
+                    return Err(e.into());
+                }
+            }
 
             // Get destination pointer
             let dst_ptr = dst_device_ptr + video_info.offset[plane] as u64;
@@ -590,6 +604,13 @@ pub(crate) fn alloc_copy_gst_memory(
             };
             let width = dma_video_info.width() as i32;
 
+            tracing::info!(
+                "Kernel params: width={}, height={}, dst_pitch={}",
+                width,
+                height,
+                dst_pitch
+            );
+
             // Launch kernel
             let kernel = get_copy_kernel()?;
             let block_dim = (16, 16);
@@ -597,6 +618,8 @@ pub(crate) fn alloc_copy_gst_memory(
                 (width + block_dim.0 - 1) / block_dim.0,
                 (height + block_dim.1 - 1) / block_dim.1,
             );
+
+            tracing::info!("Grid: {:?}, Block: {:?}", grid_dim, block_dim);
 
             let mut args: [*mut c_void; 5] = [
                 &tex_obj as *const _ as *mut c_void,
@@ -606,7 +629,8 @@ pub(crate) fn alloc_copy_gst_memory(
                 &dst_pitch as *const _ as *mut c_void,
             ];
 
-            cuda_call!(cuLaunchKernel(
+            tracing::info!("Launching kernel...");
+            match cuda_call!(cuLaunchKernel(
                 kernel,
                 grid_dim.0 as c_uint,
                 grid_dim.1 as c_uint,
@@ -618,10 +642,19 @@ pub(crate) fn alloc_copy_gst_memory(
                 stream_handle,
                 args.as_mut_ptr(),
                 ptr::null_mut(),
-            ))?;
+            )) {
+                Ok(_) => tracing::info!("Kernel launched successfully"),
+                Err(e) => {
+                    tracing::error!("cuLaunchKernel failed: {}", e);
+                    cuda_call!(cuTexObjectDestroy(tex_obj))?;
+                    return Err(e.into());
+                }
+            }
 
             // Clean up texture object
+            tracing::info!("Destroying texture object...");
             cuda_call!(cuTexObjectDestroy(tex_obj))?;
+            tracing::info!("Plane {} processed successfully", plane);
         } else {
             // Pitched pointer - use regular copy
             let mut copy_params: CUDA_MEMCPY2D = unsafe { std::mem::zeroed() };
@@ -668,12 +701,15 @@ pub(crate) fn alloc_copy_gst_memory(
         }
     }
 
+    tracing::info!("Synchronizing stream...");
     match cuda_call!(cuStreamSynchronize(stream_handle)) {
         Ok(_) => {
+            tracing::info!("Stream synchronized");
             unsafe { gst_ffi::gst_memory_unmap(gst_memory, &mut map_info) };
             Ok(unsafe { gst::Memory::from_glib_full(gst_memory) })
         }
         Err(error) => {
+            tracing::error!("cuStreamSynchronize failed: {}", error);
             unsafe { gst_ffi::gst_memory_unmap(gst_memory, &mut map_info) };
             unsafe { gst_ffi::gst_memory_unref(gst_memory) };
             Err(format!("Failed to synchronize CUDA stream: {}", error).into())
