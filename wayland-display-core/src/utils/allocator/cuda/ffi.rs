@@ -183,6 +183,7 @@ unsafe extern "C" {
     ) -> CUresult;
 
     fn cuCtxGetCurrent(pctx: *mut CUcontext) -> CUresult;
+    fn cuStreamQuery(hStream: CUstream) -> CUresult;
 }
 
 fn gst_dma_video_info_to_video_info(
@@ -788,6 +789,25 @@ pub(crate) fn alloc_copy_gst_memory(
                 &height as *const _ as *mut c_void,
                 &dst_pitch as *const _ as *mut c_void,
             ];
+
+            tracing::info!(
+                "Args prepared: tex_obj={}, dst_ptr={:#x}, width={}, height={}, dst_pitch={}",
+                tex_obj,
+                dst_ptr,
+                width,
+                height,
+                dst_pitch
+            );
+
+            // Try a dummy CUDA call to trigger any pending error
+            unsafe {
+                let dummy_result = cuStreamQuery(stream_handle);
+                tracing::info!(
+                    "cuStreamQuery (dummy check): {} (code: {})",
+                    cuda_result_to_string(dummy_result),
+                    dummy_result
+                );
+            }
 
             // Before launching kernel, check for sticky errors
             tracing::info!("Checking for previous CUDA errors...");
