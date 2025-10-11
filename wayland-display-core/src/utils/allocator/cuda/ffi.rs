@@ -63,6 +63,33 @@ type CUarray = *mut c_void;
 pub(crate) type CUgraphicsResource = *mut c_void;
 type CUresult = c_uint;
 
+type CUtexObject = u64;
+type CUfunction = *mut c_void;
+type CUmodule = *mut c_void;
+
+const CU_TR_FILTER_MODE_POINT: c_uint = 0;
+const CU_TR_ADDRESS_MODE_CLAMP: c_uint = 1;
+
+#[repr(C)]
+struct CUDA_RESOURCE_DESC {
+    resType: c_uint, // CU_RESOURCE_TYPE_ARRAY = 0
+    array: CUarray,
+    _padding: [u64; 15], // Ensure correct size
+}
+
+#[repr(C)]
+struct CUDA_TEXTURE_DESC {
+    addressMode: [c_uint; 3],
+    filterMode: c_uint,
+    flags: c_uint,
+    maxAnisotropy: c_uint,
+    mipmapFilterMode: c_uint,
+    mipmapLevelBias: f32,
+    minMipmapLevelClamp: f32,
+    maxMipmapLevelClamp: f32,
+    _padding: [u32; 16],
+}
+
 // CUDA constants
 pub(crate) const CUDA_SUCCESS: CUresult = 0;
 
@@ -116,6 +143,34 @@ unsafe extern "C" {
     ) -> CUresult;
 
     fn cuStreamSynchronize(stream: CUstream) -> CUresult;
+
+    fn cuModuleLoadData(module: *mut CUmodule, image: *const c_void) -> CUresult;
+    fn cuModuleGetFunction(hfunc: *mut CUfunction, hmod: CUmodule, name: *const c_char)
+    -> CUresult;
+
+    fn cuTexObjectCreate(
+        pTexObject: *mut CUtexObject,
+        pResDesc: *const CUDA_RESOURCE_DESC,
+        pTexDesc: *const CUDA_TEXTURE_DESC,
+        pResViewDesc: *const c_void,
+    ) -> CUresult;
+
+    fn cuTexObjectDestroy(texObject: CUtexObject) -> CUresult;
+
+    fn cuLaunchKernel(
+        f: CUfunction,
+        gridDimX: c_uint,
+        gridDimY: c_uint,
+        gridDimZ: c_uint,
+        blockDimX: c_uint,
+        blockDimY: c_uint,
+        blockDimZ: c_uint,
+        sharedMemBytes: c_uint,
+        hStream: CUstream,
+        kernelParams: *mut *mut c_void,
+        extra: *mut *mut c_void,
+    ) -> CUresult;
+
 }
 
 fn gst_dma_video_info_to_video_info(
@@ -261,6 +316,39 @@ impl Drop for CudaContextGuard {
 pub(crate) const GST_BUFFER_POOL_OPTION_VIDEO_META: &[u8] = b"GstBufferPoolOptionVideoMeta\0";
 const GST_MAP_CUDA: u32 = gst_ffi::GST_MAP_FLAG_LAST << 1;
 
+struct CudaKernel {
+    module: CUmodule,
+    function: CUfunction,
+}
+
+unsafe impl Send for CudaKernel {}
+unsafe impl Sync for CudaKernel {}
+
+// Load kernel once during initialization
+static COPY_KERNEL: std::sync::OnceLock<CudaKernel> = std::sync::OnceLock::new();
+
+fn get_copy_kernel() -> Result<CUfunction, String> {
+    let kernel = COPY_KERNEL.get_or_init(|| {
+        let ptx = include_bytes!("copy_kernel.ptx");
+        let mut module: CUmodule = ptr::null_mut();
+        cuda_call!(cuModuleLoadData(&mut module, ptx.as_ptr() as *const c_void))
+            .expect("Failed to load PTX module");
+
+        let mut function: CUfunction = ptr::null_mut();
+        let func_name = b"copy_array_to_linear\0";
+        cuda_call!(cuModuleGetFunction(
+            &mut function,
+            module,
+            func_name.as_ptr() as *const c_char
+        ))
+        .expect("Failed to get kernel function");
+
+        CudaKernel { module, function }
+    });
+
+    Ok(kernel.function)
+}
+
 pub(crate) fn alloc_copy_gst_memory(
     egl_frame: CUeglFrame,
     cuda_context: &CUDAContext,
@@ -340,48 +428,128 @@ pub(crate) fn alloc_copy_gst_memory(
 
     // Copy from EGL frame to GStreamer memory for each plane
     let _cuda_context_guard = CudaContextGuard::new(cuda_context)?;
+
     for plane in 0..egl_frame.plane_count as usize {
-        let mut copy_params: CUDA_MEMCPY2D = unsafe { std::mem::zeroed() };
+        if egl_frame.frame_type == 0 {
+            // Array type - use GPU kernel for detiling
+            let src_array = unsafe { egl_frame.frame.p_array[plane] };
 
-        // Set up source (from EGL frame)
-        unsafe {
-            match egl_frame.frame_type {
-                0 => {
-                    // Array type
-                    copy_params.srcMemoryType = CU_MEMORYTYPE_ARRAY;
-                    copy_params.srcArray = egl_frame.frame.p_array[plane];
+            // Create texture object from CUDA array
+            let res_desc = CUDA_RESOURCE_DESC {
+                resType: 0, // CU_RESOURCE_TYPE_ARRAY
+                array: src_array,
+                _padding: [0; 15],
+            };
+
+            let tex_desc = CUDA_TEXTURE_DESC {
+                addressMode: [CU_TR_ADDRESS_MODE_CLAMP; 3],
+                filterMode: CU_TR_FILTER_MODE_POINT,
+                flags: 0,
+                maxAnisotropy: 1,
+                mipmapFilterMode: 0,
+                mipmapLevelBias: 0.0,
+                minMipmapLevelClamp: 0.0,
+                maxMipmapLevelClamp: 0.0,
+                _padding: [0; 16],
+            };
+
+            let mut tex_obj: CUtexObject = 0;
+            cuda_call!(cuTexObjectCreate(
+                &mut tex_obj,
+                &res_desc,
+                &tex_desc,
+                ptr::null()
+            ))?;
+
+            // Get destination pointer
+            let dst_ptr = dst_device_ptr + video_info.offset[plane] as u64;
+            let dst_pitch = video_info.stride[plane] as i32;
+
+            let height = match plane {
+                0 => dma_video_info.height() as i32,
+                _ => match dma_video_info.format().to_string().as_str() {
+                    "NV12" | "NV21" | "I420" | "YV12" => dma_video_info.height() as i32 / 2,
+                    _ => dma_video_info.height() as i32,
+                },
+            };
+            let width = dma_video_info.width() as i32;
+
+            // Launch kernel
+            let kernel = get_copy_kernel()?;
+            let block_dim = (16, 16);
+            let grid_dim = (
+                (width + block_dim.0 - 1) / block_dim.0,
+                (height + block_dim.1 - 1) / block_dim.1,
+            );
+
+            let mut args: [*mut c_void; 5] = [
+                &tex_obj as *const _ as *mut c_void,
+                &dst_ptr as *const _ as *mut c_void,
+                &width as *const _ as *mut c_void,
+                &height as *const _ as *mut c_void,
+                &dst_pitch as *const _ as *mut c_void,
+            ];
+
+            cuda_call!(cuLaunchKernel(
+                kernel,
+                grid_dim.0 as c_uint,
+                grid_dim.1 as c_uint,
+                1,
+                block_dim.0 as c_uint,
+                block_dim.1 as c_uint,
+                1,
+                0,
+                stream_handle,
+                args.as_mut_ptr(),
+                ptr::null_mut(),
+            ))?;
+
+            // Clean up texture object
+            cuda_call!(cuTexObjectDestroy(tex_obj))?;
+        } else {
+            // Pitched pointer - use regular copy
+            let mut copy_params: CUDA_MEMCPY2D = unsafe { std::mem::zeroed() };
+
+            // Set up source (from EGL frame)
+            unsafe {
+                match egl_frame.frame_type {
+                    0 => {
+                        // Array type
+                        copy_params.srcMemoryType = CU_MEMORYTYPE_ARRAY;
+                        copy_params.srcArray = egl_frame.frame.p_array[plane];
+                    }
+                    1 => {
+                        // Pitched pointer type
+                        copy_params.srcMemoryType = CU_MEMORYTYPE_DEVICE;
+                        copy_params.srcDevice = egl_frame.frame.p_pitch[plane] as CUdeviceptr;
+                        copy_params.srcPitch = egl_frame.pitch as usize;
+                    }
+                    _ => {
+                        return Err("Unsupported EGL frame type".into());
+                    }
                 }
-                1 => {
-                    // Pitched pointer type
-                    copy_params.srcMemoryType = CU_MEMORYTYPE_DEVICE;
-                    copy_params.srcDevice = egl_frame.frame.p_pitch[plane] as CUdeviceptr;
-                    copy_params.srcPitch = egl_frame.pitch as usize;
-                }
+            }
+
+            copy_params.dstMemoryType = CU_MEMORYTYPE_DEVICE;
+            copy_params.dstDevice = dst_device_ptr + video_info.offset[plane] as u64;
+            copy_params.dstPitch = video_info.stride[plane] as usize;
+
+            // Set copy dimensions
+            copy_params.WidthInBytes = video_info.stride[plane] as usize;
+            copy_params.Height = match plane {
+                0 => dma_video_info.height() as usize, // Y plane (or single plane)
                 _ => {
-                    return Err("Unsupported EGL frame type".into());
+                    // For YUV formats, UV planes are typically half height
+                    let plane_height = match dma_video_info.format().to_string().as_str() {
+                        "NV12" | "NV21" | "I420" | "YV12" => dma_video_info.height() as usize / 2,
+                        _ => dma_video_info.height() as usize, // For other formats, assume same height
+                    };
+                    plane_height
                 }
-            }
+            };
+
+            cuda_call!(CuMemcpy2DAsync(&copy_params, stream_handle))?;
         }
-
-        copy_params.dstMemoryType = CU_MEMORYTYPE_DEVICE;
-        copy_params.dstDevice = dst_device_ptr + video_info.offset[plane] as u64;
-        copy_params.dstPitch = video_info.stride[plane] as usize;
-
-        // Set copy dimensions
-        copy_params.WidthInBytes = video_info.stride[plane] as usize;
-        copy_params.Height = match plane {
-            0 => dma_video_info.height() as usize, // Y plane (or single plane)
-            _ => {
-                // For YUV formats, UV planes are typically half height
-                let plane_height = match dma_video_info.format().to_string().as_str() {
-                    "NV12" | "NV21" | "I420" | "YV12" => dma_video_info.height() as usize / 2,
-                    _ => dma_video_info.height() as usize, // For other formats, assume same height
-                };
-                plane_height
-            }
-        };
-
-        cuda_call!(CuMemcpy2DAsync(&copy_params, stream_handle))?;
     }
 
     // Unmap immediately after launching async copies
