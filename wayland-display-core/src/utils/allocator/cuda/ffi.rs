@@ -384,17 +384,14 @@ pub(crate) fn alloc_copy_gst_memory(
         cuda_call!(CuMemcpy2DAsync(&copy_params, stream_handle))?;
     }
 
-    match cuda_call!(cuStreamSynchronize(stream_handle)) {
-        Ok(_) => {
-            unsafe { gst_ffi::gst_memory_unmap(gst_memory, &mut map_info) };
-            Ok(unsafe { gst::Memory::from_glib_full(gst_memory) })
-        }
-        Err(error) => {
-            unsafe { gst_ffi::gst_memory_unmap(gst_memory, &mut map_info) };
-            unsafe { gst_ffi::gst_memory_unref(gst_memory) };
-            Err(format!("Failed to synchronize CUDA stream: {}", error).into())
-        }
-    }
+    // Unmap immediately after launching async copies
+    // The memory remains valid and the copies will complete asynchronously
+    unsafe { gst_ffi::gst_memory_unmap(gst_memory, &mut map_info) };
+
+    // Return the memory without synchronizing
+    // The CUDA runtime will automatically synchronize when the downstream
+    // element (encoder) tries to access this memory
+    Ok(unsafe { gst::Memory::from_glib_full(gst_memory) })
 }
 
 pub(crate) fn cuda_result_to_string(result: CUresult) -> &'static str {

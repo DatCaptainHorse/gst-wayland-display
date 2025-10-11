@@ -47,6 +47,7 @@ impl EglExtensions {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct EGLImage {
     image: EGLImageKHR,
     destroy_fn: PFN_eglDestroyImageKHR,
@@ -406,6 +407,7 @@ impl CUDAContext {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct CUDAImage {
     cuda_graphic_resource: CUgraphicsResource,
 }

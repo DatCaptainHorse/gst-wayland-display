@@ -17,6 +17,7 @@ use smithay::reexports::drm::buffer::DrmFourcc;
 use smithay::reexports::gbm::Modifier;
 use smithay::reexports::rustix::fs::{SeekFrom, seek};
 use smithay::utils::{DeviceFd, Rectangle};
+use std::cell::OnceCell;
 use std::fs::File;
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 
@@ -132,6 +133,8 @@ pub struct GsCUDABuf {
     cuda_context: CUDAContext,
     buffer_pool: Option<CUDABufferPool>,
     egl_extensions: EglExtensions,
+    egl_image: OnceCell<EGLImage>,
+    cuda_image: OnceCell<CUDAImage>,
 }
 
 impl GsCUDABuf {
@@ -168,6 +171,8 @@ impl GsCUDABuf {
                 cuda_context,
                 buffer_pool,
                 egl_extensions: EglExtensions::new().expect("Failed to get EGL extensions"),
+                egl_image: OnceCell::new(),
+                cuda_image: OnceCell::new(),
             }),
             Err(_) => {
                 tracing::warn!("Failed to create DMA buffer: {}", result.unwrap_err());
@@ -315,13 +320,16 @@ impl GsBuffer<GlesRenderer> for GsBufferType {
                 gst_buffer
             }
             GsBufferType::CUDA(buffer) => {
-                let egl_display = renderer.egl_context().display().get_display_handle().handle;
-                let egl_image =
+                let egl_image = buffer.egl_image.get_or_init(|| {
+                    let egl_display = renderer.egl_context().display().get_display_handle().handle;
                     EGLImage::from(&buffer.buffer, &egl_display, &buffer.egl_extensions)
-                        .expect("Failed to create EGLImage from DMA-BUF");
+                        .expect("Failed to create EGLImage from DMA-BUF")
+                });
 
-                let cuda_image = CUDAImage::from(&egl_image, &buffer.cuda_context)
-                    .expect("Failed to create CUDA image from EGLImage");
+                let cuda_image = buffer.cuda_image.get_or_init(|| {
+                    CUDAImage::from(egl_image, &buffer.cuda_context)
+                        .expect("Failed to create CUDA image from EGLImage")
+                });
 
                 cuda_image
                     .to_gst_buffer(

@@ -98,6 +98,7 @@ impl Fixture {
                     model: "Wolf".into(),
                     size: (0, 0).into(),
                     subpixel: Subpixel::Unknown,
+                    serial_number: "".to_string(),
                 },
             );
             output.create_global::<State>(&self.server.dh);
