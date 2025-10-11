@@ -670,12 +670,13 @@ pub(crate) fn alloc_copy_gst_memory(
             let tex_result =
                 unsafe { cuTexObjectCreate(&mut tex_obj, &res_desc, &tex_desc, ptr::null()) };
 
+            tracing::info!(
+                "cuTexObjectCreate returned: {} (code: {})",
+                cuda_result_to_string(tex_result),
+                tex_result
+            );
+
             if tex_result != CUDA_SUCCESS {
-                tracing::error!(
-                    "cuTexObjectCreate failed: {} (code: {})",
-                    cuda_result_to_string(tex_result),
-                    tex_result
-                );
                 return Err(format!(
                     "Failed to create texture object: {} (code: {})",
                     cuda_result_to_string(tex_result),
@@ -689,7 +690,10 @@ pub(crate) fn alloc_copy_gst_memory(
             unsafe {
                 let mut dummy_ctx: CUcontext = ptr::null_mut();
                 let err = cuCtxGetCurrent(&mut dummy_ctx);
-                tracing::info!("After cuTexObjectCreate, error state: {}", cuda_result_to_string(err));
+                tracing::info!(
+                    "After cuTexObjectCreate, error state: {}",
+                    cuda_result_to_string(err)
+                );
             }
 
             // Get destination pointer
