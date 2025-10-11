@@ -524,14 +524,31 @@ extern \"C\" __global__ void copy_array_to_linear(
             cuda_result_to_string(err_after_load)
         );
 
+        tracing::info!("Getting kernel function...");
         let mut function: CUfunction = ptr::null_mut();
         let func_name = b"copy_array_to_linear\0";
-        cuda_call!(cuModuleGetFunction(
-            &mut function,
-            module,
-            func_name.as_ptr() as *const c_char
-        ))
-        .expect("Failed to get kernel function");
+        let func_result = unsafe {
+            cuModuleGetFunction(&mut function, module, func_name.as_ptr() as *const c_char)
+        };
+
+        let err_after_getfunc = unsafe { cuCtxGetCurrent(&mut ctx_check) };
+        tracing::info!(
+            "cuModuleGetFunction result: {} (code: {})",
+            cuda_result_to_string(func_result),
+            func_result
+        );
+        tracing::info!(
+            "Error state AFTER cuModuleGetFunction: {}",
+            cuda_result_to_string(err_after_getfunc)
+        );
+
+        if func_result != CUDA_SUCCESS {
+            panic!(
+                "Failed to get kernel function: {} (code: {})",
+                cuda_result_to_string(func_result),
+                func_result
+            );
+        }
 
         CudaKernel { module, function }
     });
