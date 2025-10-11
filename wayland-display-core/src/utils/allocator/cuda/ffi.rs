@@ -685,6 +685,13 @@ pub(crate) fn alloc_copy_gst_memory(
             }
             tracing::info!("Texture object created: {}", tex_obj);
 
+            // **CHECK IMMEDIATELY AFTER TEXTURE CREATION**
+            unsafe {
+                let mut dummy_ctx: CUcontext = ptr::null_mut();
+                let err = cuCtxGetCurrent(&mut dummy_ctx);
+                tracing::info!("After cuTexObjectCreate, error state: {}", cuda_result_to_string(err));
+            }
+
             // Get destination pointer
             let dst_ptr = dst_device_ptr + video_info.offset[plane] as u64;
             let dst_pitch = video_info.stride[plane] as i32;
