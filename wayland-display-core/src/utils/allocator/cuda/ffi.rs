@@ -405,6 +405,27 @@ extern "C" __global__ void copy_array_to_linear(
         let result = unsafe { nvrtcCompileProgram(prog, 0, ptr::null()) };
 
         if result != NVRTC_SUCCESS {
+            // Get compilation log
+            let mut log_size: usize = 0;
+            let mut log: Vec<u8> = Vec::new();
+
+            // NVRTC has nvrtcGetProgramLogSize and nvrtcGetProgramLog
+            unsafe extern "C" {
+                fn nvrtcGetProgramLogSize(prog: *mut c_void, logSizeRet: *mut usize) -> c_int;
+                fn nvrtcGetProgramLog(prog: *mut c_void, log: *mut c_char) -> c_int;
+            }
+
+            unsafe {
+                nvrtcGetProgramLogSize(prog, &mut log_size);
+            }
+            if log_size > 0 {
+                log.resize(log_size, 0);
+                unsafe {
+                    nvrtcGetProgramLog(prog, log.as_mut_ptr() as *mut c_char);
+                }
+                eprintln!("NVRTC compilation log:\n{}", String::from_utf8_lossy(&log));
+            }
+
             panic!("Failed to compile kernel: {}", unsafe {
                 std::ffi::CStr::from_ptr(nvrtcGetErrorString(result)).to_string_lossy()
             });
