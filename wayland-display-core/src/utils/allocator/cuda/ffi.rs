@@ -677,7 +677,7 @@ pub(crate) fn alloc_copy_gst_memory(
     let dst_device_ptr = map_info.data as CUdeviceptr;
 
     // Copy from EGL frame to GStreamer memory for each plane
-    let _cuda_context_guard = CudaContextGuard::new(cuda_context)?;
+    //let _cuda_context_guard = CudaContextGuard::new(cuda_context)?;
 
     // CHECK 4: After context guard (push)
     unsafe {
@@ -812,7 +812,8 @@ pub(crate) fn alloc_copy_gst_memory(
             // Before launching kernel, check for sticky errors
             tracing::info!("Checking for previous CUDA errors...");
             unsafe {
-                let error = cuCtxGetCurrent(ptr::null_mut());
+                let mut dummy_ctx: CUcontext = ptr::null_mut();
+                let error = cuCtxGetCurrent(&mut dummy_ctx);
                 if error != CUDA_SUCCESS {
                     tracing::error!(
                         "Previous CUDA error detected: {}",
