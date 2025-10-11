@@ -370,12 +370,15 @@ extern \"C\" __global__ void copy_array_to_linear(
     int y = blockIdx.y * blockDim.y + threadIdx.y;
     
     if (x < width && y < height) {
-        uchar4 pixel = tex2D<uchar4>(src_tex, x + 0.5f, y + 0.5f);
+        // Use float4 and normalize, works for any internal format
+        float4 pixel = tex2D<float4>(src_tex, (float)x + 0.5f, (float)y + 0.5f);
         int dst_idx = y * dst_pitch + x * 4;
-        dst[dst_idx + 0] = pixel.x;
-        dst[dst_idx + 1] = pixel.y;
-        dst[dst_idx + 2] = pixel.z;
-        dst[dst_idx + 3] = pixel.w;
+        
+        // Convert from [0,1] to [0,255]
+        dst[dst_idx + 0] = (unsigned char)(__saturatef(pixel.x) * 255.0f);
+        dst[dst_idx + 1] = (unsigned char)(__saturatef(pixel.y) * 255.0f);
+        dst[dst_idx + 2] = (unsigned char)(__saturatef(pixel.z) * 255.0f);
+        dst[dst_idx + 3] = (unsigned char)(__saturatef(pixel.w) * 255.0f);
     }
 }\0";
 
@@ -651,10 +654,22 @@ pub(crate) fn alloc_copy_gst_memory(
                 }
             }
 
+            tracing::info!("Checking for kernel errors...");
             // Clean up texture object
-            tracing::info!("Destroying texture object...");
-            cuda_call!(cuTexObjectDestroy(tex_obj))?;
-            tracing::info!("Plane {} processed successfully", plane);
+            let sync_result = unsafe { cuStreamSynchronize(stream_handle) };
+            if sync_result != CUDA_SUCCESS {
+                tracing::error!(
+                    "Kernel execution failed: {}",
+                    cuda_result_to_string(sync_result)
+                );
+                cuda_call!(cuTexObjectDestroy(tex_obj))?;
+                return Err(format!(
+                    "Kernel execution error: {}",
+                    cuda_result_to_string(sync_result)
+                )
+                .into());
+            }
+            tracing::info!("Kernel executed successfully");
         } else {
             // Pitched pointer - use regular copy
             let mut copy_params: CUDA_MEMCPY2D = unsafe { std::mem::zeroed() };
