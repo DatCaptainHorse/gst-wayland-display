@@ -83,11 +83,11 @@ impl State {
             [0.0, 0.0, 0.0, 1.0],
         )?;
 
-        let buffer = self
-            .output_buffer
-            .clone()
-            .unwrap()
-            .to_gs_buffer(&mut target, &mut self.renderer);
+        let buffer = self.output_buffer.clone().unwrap().to_gs_buffer(
+            &mut target,
+            &mut self.renderer,
+            self.cuda_buffer_pool.as_ref(),
+        );
 
         Ok((buffer, render_output_result))
     }

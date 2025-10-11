@@ -130,7 +130,6 @@ pub struct GsCUDABuf {
     buffer: Dmabuf,
     video_info: VideoInfoDmaDrm,
     cuda_context: CUDAContext,
-    buffer_pool: Option<CUDABufferPool>,
     egl_extensions: EglExtensions,
 }
 
@@ -139,7 +138,6 @@ impl GsCUDABuf {
         render_node: DrmNode,
         cuda_context: CUDAContext,
         video_info: VideoInfoDmaDrm,
-        buffer_pool: Option<CUDABufferPool>,
     ) -> Option<Self> {
         tracing::debug!("Creating CUDA buffer from {:?}", &video_info);
         let drm_fourcc = gst_video_format_to_drm_fourcc(&video_info)?;
@@ -166,7 +164,6 @@ impl GsCUDABuf {
                 buffer,
                 video_info,
                 cuda_context,
-                buffer_pool,
                 egl_extensions: EglExtensions::new().expect("Failed to get EGL extensions"),
             }),
             Err(_) => {
@@ -192,7 +189,12 @@ pub enum VideoInfoTypes {
 pub trait GsBuffer<R: Renderer> {
     fn bind(&mut self, renderer: &mut R) -> Result<GlesTarget, R::Error>;
 
-    fn to_gs_buffer(&self, target: &mut GlesTarget, renderer: &mut R) -> gst::Buffer;
+    fn to_gs_buffer(
+        &self,
+        target: &mut GlesTarget,
+        renderer: &mut R,
+        buffer_pool: Option<&CUDABufferPool>,
+    ) -> gst::Buffer;
 
     // Returns the underlying VideoInfo or VideoInfoDmaDrm
     fn get_video_info(&self) -> VideoInfoTypes;
@@ -207,7 +209,12 @@ impl GsBuffer<GlesRenderer> for GsBufferType {
         }
     }
 
-    fn to_gs_buffer(&self, target: &mut GlesTarget, renderer: &mut GlesRenderer) -> GstBuffer {
+    fn to_gs_buffer(
+        &self,
+        target: &mut GlesTarget,
+        renderer: &mut GlesRenderer,
+        buffer_pool: Option<&CUDABufferPool>,
+    ) -> GstBuffer {
         match self {
             GsBufferType::RAW(buffer) => {
                 let mapping = renderer
@@ -324,11 +331,7 @@ impl GsBuffer<GlesRenderer> for GsBufferType {
                     .expect("Failed to create CUDA image from EGLImage");
 
                 cuda_image
-                    .to_gst_buffer(
-                        buffer.video_info.clone(),
-                        &buffer.cuda_context,
-                        &buffer.buffer_pool,
-                    )
+                    .to_gst_buffer(buffer.video_info.clone(), &buffer.cuda_context, buffer_pool)
                     .expect("Failed to create Gstreamer buffer from CUDA image")
             }
         }
@@ -468,7 +471,7 @@ mod tests {
         assert!(bind_result.is_ok());
 
         render_into(&mut renderer, &mut raw_buffer.unwrap().buffer, 10, 10);
-        let gst_buffer = buffer_clone.to_gs_buffer(&mut bind_result.unwrap(), &mut renderer);
+        let gst_buffer = buffer_clone.to_gs_buffer(&mut bind_result.unwrap(), &mut renderer, None);
         assert!(gst_buffer.is_writable());
         assert_eq!(gst_buffer.size(), video_info.size());
 
@@ -536,7 +539,7 @@ mod tests {
         assert!(bind_result.is_ok());
 
         render_into(&mut renderer, &mut raw_buffer.unwrap().buffer, 10, 10);
-        let gst_buffer = buffer_clone.to_gs_buffer(&mut bind_result.unwrap(), &mut renderer);
+        let gst_buffer = buffer_clone.to_gs_buffer(&mut bind_result.unwrap(), &mut renderer, None);
         let gst_buffer_size = gst_buffer.size();
         assert!(gst_buffer_size >= 4096); // There might be padding but it should at least contain our data
 
@@ -620,12 +623,7 @@ mod tests {
             .activate()
             .expect("Failed to activate buffer pool");
 
-        let raw_buffer = GsCUDABuf::new(
-            render_node,
-            gst_cuda_ctx.clone(),
-            drm_video_info.clone(),
-            Some(buffer_pool),
-        );
+        let raw_buffer = GsCUDABuf::new(render_node, gst_cuda_ctx.clone(), drm_video_info.clone());
         assert!(raw_buffer.is_some());
 
         let mut buffer = GsBufferType::CUDA(raw_buffer.clone().unwrap());
@@ -635,7 +633,8 @@ mod tests {
         assert!(bind_result.is_ok());
 
         render_into(&mut renderer, &mut raw_buffer.unwrap().buffer, 10, 10);
-        let gst_buffer = buffer_clone.to_gs_buffer(&mut bind_result.unwrap(), &mut renderer);
+        let gst_buffer =
+            buffer_clone.to_gs_buffer(&mut bind_result.unwrap(), &mut renderer, Some(&buffer_pool));
 
         let gst_buffer_size = gst_buffer.size();
         assert!(gst_buffer_size >= 4096); // There might be padding, but it should at least contain our data

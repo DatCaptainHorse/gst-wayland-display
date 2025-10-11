@@ -12,7 +12,7 @@ use std::str::FromStr;
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread::JoinHandle;
 use utils::RenderTarget;
-
+use crate::utils::allocator::cuda::CUDABufferPool;
 use crate::utils::device::gpu::GPUDevice;
 
 pub(crate) mod comp;
@@ -30,6 +30,7 @@ pub enum Command {
         SyncSender<Result<gst::Buffer, SwapBuffersError>>,
         Option<Tracer>,
     ),
+    UpdateCudaPool(Option<CUDABufferPool>),
     KeyboardInput(u32, KeyState),
     PointerMotion(Point<f64, Logical>),
     PointerMotionAbsolute(Point<f64, Logical>),

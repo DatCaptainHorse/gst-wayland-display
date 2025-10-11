@@ -80,6 +80,7 @@ use crate::utils::allocator::{
 use crate::utils::device::gpu::GPUDevice;
 use crate::utils::renderer::setup_renderer;
 use crate::{utils::RenderTarget, wayland::protocols::wl_drm::create_drm_global};
+use crate::utils::allocator::cuda::CUDABufferPool;
 
 #[derive(Debug, Default)]
 pub struct ClientState {
@@ -104,6 +105,7 @@ pub struct State {
     pub renderer: GlesRenderer,
     dmabuf_global: Option<(DmabufGlobal, GlobalId)>,
     last_render: Option<Instant>,
+    pub cuda_buffer_pool: Option<CUDABufferPool>,
 
     // management
     pub output: Option<Output>,
@@ -223,6 +225,7 @@ impl State {
             dmabuf_global,
             video_info: None,
             last_render: None,
+            cuda_buffer_pool: None,
 
             space,
             popups: PopupManager::default(),
@@ -358,7 +361,6 @@ pub(crate) fn init(
                                     render_node.unwrap(),
                                     base_info.cuda_context,
                                     base_info.video_info,
-                                    base_info.buffer_pool,
                                 )
                                 .expect("Failed to create GsCUDABuf");
                                 state.output_buffer = Some(GsBufferType::CUDA(allocator));
@@ -526,6 +528,9 @@ pub(crate) fn init(
                         }
                         None => render(state, Instant::now()),
                     };
+                }
+                Event::Msg(Command::UpdateCudaPool(pool)) => {
+                    state.cuda_buffer_pool = pool;
                 }
                 Event::Msg(Command::Quit) | Event::Closed => {
                     state.should_quit = true;

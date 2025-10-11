@@ -612,6 +612,11 @@ impl BaseSrcImpl for WaylandDisplaySrc {
 
         let _ = self.command_tx.send(Command::VideoInfo(video_info));
 
+        let settings = self.settings.lock().unwrap();
+        if let Some(pool) = &settings.cudabuffer_pool {
+            let _ = self.command_tx.send(Command::UpdateCudaPool(Some(pool.clone())));
+        }
+
         self.parent_set_caps(caps)
     }
 

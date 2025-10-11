@@ -432,10 +432,10 @@ impl CUDAImage {
         &self,
         dma_video_info: VideoInfoDmaDrm,
         cuda_context: &CUDAContext,
-        buffer_pool: &Option<CUDABufferPool>,
+        buffer_pool: Option<&CUDABufferPool>,
     ) -> Result<GstBuffer, Box<dyn std::error::Error>> {
         tracing::info!("to_gst_buffer called with pool: {}", buffer_pool.is_some());
-        
+
         let _cuda_context_guard = ffi::CudaContextGuard::new(cuda_context)?;
 
         let mut egl_frame = unsafe { std::mem::zeroed() };
@@ -451,7 +451,7 @@ impl CUDAImage {
             egl_frame,
             cuda_context,
             dma_video_info.clone(),
-            buffer_pool.as_ref().map(|p| p.pool),
+            buffer_pool.map(|p| p.pool),
         )?;
 
         // Create the buffer using GStreamer Rust bindings
