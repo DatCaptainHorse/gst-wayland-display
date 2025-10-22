@@ -46,9 +46,9 @@ impl EglExtensions {
 
 #[derive(Debug)]
 pub struct EGLImage {
-    image: EGLImageKHR,
-    destroy_fn: PFN_eglDestroyImageKHR,
-    egl_display: Arc<EGLDisplay>,
+    pub(crate) image: EGLImageKHR,
+    pub(crate) destroy_fn: PFN_eglDestroyImageKHR,
+    pub(crate) egl_display: Arc<EGLDisplay>,
 }
 
 impl EGLImage {

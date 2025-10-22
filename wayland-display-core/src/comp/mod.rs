@@ -322,6 +322,7 @@ pub(crate) fn init(
                                 model: "Wolf".into(),
                                 size: (0, 0).into(),
                                 subpixel: Subpixel::Unknown,
+                                serial_number: "".to_string(),
                             },
                         );
                         output.create_global::<State>(&state.dh);
@@ -360,7 +361,7 @@ pub(crate) fn init(
                                     .get_display_handle()
                                     .handle;
                                 let allocator = GsCUDABuf::new(
-                                    render_node.unwrap(),
+                                    &mut state.renderer,
                                     base_info.cuda_context,
                                     base_info.video_info,
                                     base_info.buffer_pool,

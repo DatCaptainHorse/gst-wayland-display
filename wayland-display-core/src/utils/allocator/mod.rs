@@ -13,6 +13,7 @@ use smithay::backend::allocator::dmabuf::{Dmabuf, DmabufAllocator};
 use smithay::backend::allocator::gbm::{GbmAllocator, GbmBufferFlags, GbmDevice};
 use smithay::backend::allocator::{Allocator, Buffer, Fourcc};
 use smithay::backend::drm::DrmNode;
+use smithay::backend::egl::ffi::egl;
 use smithay::backend::egl::ffi::egl::types::EGLDisplay;
 use smithay::backend::renderer::gles::{GlesError, GlesRenderbuffer, GlesRenderer, GlesTarget};
 use smithay::backend::renderer::{Bind, ExportMem, Offscreen, Renderer};
@@ -132,7 +133,7 @@ impl GsDmaBuf {
 #[cfg(feature = "cuda")]
 #[derive(Debug, Clone)]
 pub struct GsCUDABuf {
-    buffer: Dmabuf,
+    buffer: GlesRenderbuffer,
     video_info: VideoInfoDmaDrm,
     cuda_context: CUDAContext,
     // TODO: Set in compositor by UpdateCUDABufferPool, is this fine/ideal?
@@ -145,62 +146,76 @@ pub struct GsCUDABuf {
     cuda_image: Arc<CUDAImage>,
 }
 
+impl EGLImage {
+    pub fn from_renderbuffer(
+        rbo: smithay::backend::renderer::gles::ffi::types::GLuint,
+        egl_display: &EGLDisplay,
+        egl_ext: &EglExtensions,
+    ) -> Result<Self, String> {
+        let attribs = [egl::NONE as egl::types::EGLint];
+
+        let egl_image = unsafe {
+            (egl_ext.create_image)(
+                *egl_display,
+                egl::NO_CONTEXT.cast_mut(), // EGL_NO_CONTEXT
+                egl::GL_RENDERBUFFER, // 0x30B9
+                rbo as *mut crate::c_void,
+                attribs.as_ptr(),
+            )
+        };
+
+        if egl_image == egl::NO_IMAGE_KHR {
+            Err("Failed to create EGLImage from renderbuffer".into())
+        } else {
+            Ok(EGLImage {
+                image: egl_image,
+                egl_display: Arc::new(egl_display.clone()),
+                destroy_fn: egl_ext.destroy_image,
+            })
+        }
+    }
+}
+
 #[cfg(feature = "cuda")]
 impl GsCUDABuf {
     pub fn new(
-        render_node: DrmNode,
+        renderer: &mut GlesRenderer,
         cuda_context: CUDAContext,
         video_info: VideoInfoDmaDrm,
         buffer_pool: Option<CUDABufferPool>,
         egl_display: &EGLDisplay,
     ) -> Option<Self> {
-        tracing::debug!("Creating CUDA buffer from {:?}", &video_info);
-        let drm_fourcc = gst_video_format_to_drm_fourcc(&video_info)?;
-        let drm_modifier = gst_video_format_to_drm_modifier(&video_info)?;
-        tracing::info!(
-            "Creating CUDA buffer - DrmFourcc: {:?}, Modifier: {:?}",
-            drm_fourcc,
-            drm_modifier
-        );
-        let gbm = new_gbm_device(render_node)?;
-        let allocator = GbmAllocator::new(gbm, GbmBufferFlags::RENDERING);
-        let mut dma_allocator = DmabufAllocator(allocator);
+        let format = Fourcc::Abgr8888;
 
-        let modifiers = [drm_modifier];
-        let result = dma_allocator.create_buffer(
-            video_info.width(),
-            video_info.height(),
-            drm_fourcc,
-            &modifiers,
-        );
+        // Create renderbuffer
+        let buffer: GlesRenderbuffer = renderer.create_buffer(
+            format,
+            (video_info.width() as i32, video_info.height() as i32).into(),
+        ).ok()?;
 
-        match result {
-            Ok(buffer) => {
-                let egl_extensions = EglExtensions::new().expect("Failed to get EGL extensions");
+        let egl_extensions = EglExtensions::new()
+            .expect("Failed to get EGL extensions");
 
-                // Create EGLImage once during initialization
-                let egl_image = EGLImage::from(&buffer, egl_display, &egl_extensions)
-                    .expect("Failed to create EGLImage from DMA-BUF");
+        // Get RBO from the renderbuffer
+        let rbo = buffer.get_rbo(); // Access the Rc<GlesRenderbufferInternal>.rbo
 
-                // Create CUDAImage once during initialization
-                let cuda_image = CUDAImage::from(&egl_image, &cuda_context)
-                    .expect("Failed to create CUDA image from EGLImage");
+        // Create EGLImage from RBO
+        let egl_image = EGLImage::from_renderbuffer(rbo, egl_display, &egl_extensions)
+            .expect("Failed to create EGLImage from renderbuffer");
 
-                Some(GsCUDABuf {
-                    buffer,
-                    video_info,
-                    cuda_context,
-                    buffer_pool,
-                    egl_extensions,
-                    egl_image: Arc::new(egl_image),
-                    cuda_image: Arc::new(cuda_image),
-                })
-            }
-            Err(_) => {
-                tracing::warn!("Failed to create DMA buffer: {}", result.unwrap_err());
-                None
-            }
-        }
+        // Import into CUDA
+        let cuda_image = CUDAImage::from(&egl_image, &cuda_context)
+            .expect("Failed to create CUDA image from EGLImage");
+
+        Some(GsCUDABuf {
+            buffer,
+            video_info,
+            cuda_context,
+            buffer_pool,
+            egl_extensions,
+            egl_image: Arc::new(egl_image),
+            cuda_image: Arc::new(cuda_image),
+        })
     }
 }
 
@@ -649,7 +664,7 @@ mod tests {
 
         let egl_display = renderer.egl_context().display().get_display_handle().handle;
         let raw_buffer = GsCUDABuf::new(
-            render_node,
+            &mut renderer,
             gst_cuda_ctx.clone(),
             drm_video_info.clone(),
             Some(buffer_pool),
