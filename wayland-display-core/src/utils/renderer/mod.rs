@@ -1,15 +1,15 @@
 use once_cell::sync::Lazy;
+use smithay::backend::allocator::gbm::GbmDevice;
 use smithay::backend::drm::DrmNode;
+use smithay::backend::egl::ffi::egl as ffi_egl;
 use smithay::backend::egl::{EGLContext, EGLDisplay};
 use smithay::backend::renderer::gles::GlesRenderer;
+use smithay::utils::DeviceFd;
 use std::collections::HashMap;
 use std::fs::File;
 use std::os::fd::OwnedFd;
-use std::sync::{Arc, Mutex, Weak};
 use std::os::raw::c_int;
-use smithay::backend::allocator::gbm::GbmDevice;
-use smithay::backend::egl::ffi::egl as ffi_egl;
-use smithay::utils::DeviceFd;
+use std::sync::{Arc, Mutex, Weak};
 
 static EGL_DISPLAYS: Lazy<Mutex<HashMap<Option<DrmNode>, Weak<EGLDisplay>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
@@ -39,6 +39,12 @@ pub fn setup_renderer(render_node: Option<DrmNode>) -> GlesRenderer {
                 tracing::info!("No render node, using surfaceless EGL for MIG");
 
                 unsafe {
+                    // Ensure EGL is loaded
+                    let dp_extensions = smithay::backend::egl::ffi::make_sure_egl_is_loaded()
+                        .expect("Failed to load EGL");
+
+                    tracing::debug!("EGL client extensions: {:?}", dp_extensions);
+
                     // Get surfaceless platform display
                     let egl_display = ffi_egl::GetPlatformDisplayEXT(
                         0x31DD, // EGL_PLATFORM_SURFACELESS_MESA
@@ -62,12 +68,18 @@ pub fn setup_renderer(render_node: Option<DrmNode>) -> GlesRenderer {
 
                     // Choose config for pbuffer (surfaceless needs this)
                     let config_attribs = [
-                        ffi_egl::SURFACE_TYPE as c_int, ffi_egl::PBUFFER_BIT as c_int,
-                        ffi_egl::RENDERABLE_TYPE as c_int, ffi_egl::OPENGL_ES2_BIT as c_int,
-                        ffi_egl::RED_SIZE as c_int, 8,
-                        ffi_egl::GREEN_SIZE as c_int, 8,
-                        ffi_egl::BLUE_SIZE as c_int, 8,
-                        ffi_egl::ALPHA_SIZE as c_int, 8,
+                        ffi_egl::SURFACE_TYPE as c_int,
+                        ffi_egl::PBUFFER_BIT as c_int,
+                        ffi_egl::RENDERABLE_TYPE as c_int,
+                        ffi_egl::OPENGL_ES2_BIT as c_int,
+                        ffi_egl::RED_SIZE as c_int,
+                        8,
+                        ffi_egl::GREEN_SIZE as c_int,
+                        8,
+                        ffi_egl::BLUE_SIZE as c_int,
+                        8,
+                        ffi_egl::ALPHA_SIZE as c_int,
+                        8,
                         ffi_egl::NONE as c_int,
                     ];
 
@@ -80,13 +92,14 @@ pub fn setup_renderer(render_node: Option<DrmNode>) -> GlesRenderer {
                         config,
                         1,
                         &mut num_configs,
-                    ) == 0 || num_configs == 0 {
+                    ) == 0
+                        || num_configs == 0
+                    {
                         panic!("Failed to choose EGL config");
                     }
 
                     // Wrap with smithay's EGLDisplay
-                    EGLDisplay::from_raw(egl_display, *config)
-                        .expect("Failed to wrap EGL display")
+                    EGLDisplay::from_raw(egl_display, *config).expect("Failed to wrap EGL display")
                 }
             };
 
