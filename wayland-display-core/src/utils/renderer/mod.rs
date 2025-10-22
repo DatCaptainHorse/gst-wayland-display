@@ -63,43 +63,19 @@ pub fn setup_renderer(render_node: Option<DrmNode>) -> GlesRenderer {
                         panic!("Failed to initialize EGL");
                     }
 
+                    tracing::info!("EGL {}.{} initialized", major, minor);
+
                     // Bind OpenGL ES API
                     ffi_egl::BindAPI(ffi_egl::OPENGL_ES_API);
 
-                    // Choose config for pbuffer (surfaceless needs this)
-                    let config_attribs = [
-                        ffi_egl::SURFACE_TYPE as c_int,
-                        ffi_egl::PBUFFER_BIT as c_int,
-                        ffi_egl::RENDERABLE_TYPE as c_int,
-                        ffi_egl::OPENGL_ES2_BIT as c_int,
-                        ffi_egl::RED_SIZE as c_int,
-                        8,
-                        ffi_egl::GREEN_SIZE as c_int,
-                        8,
-                        ffi_egl::BLUE_SIZE as c_int,
-                        8,
-                        ffi_egl::ALPHA_SIZE as c_int,
-                        8,
-                        ffi_egl::NONE as c_int,
-                    ];
+                    // Use EGL_NO_CONFIG_KHR since NVIDIA supports no-config contexts
+                    let config = ffi_egl::NO_CONFIG_KHR as *const std::ffi::c_void;
 
-                    let mut num_configs = 0;
-                    let config = std::ptr::null_mut();
-
-                    if ffi_egl::ChooseConfig(
-                        egl_display,
-                        config_attribs.as_ptr(),
-                        config,
-                        1,
-                        &mut num_configs,
-                    ) == 0
-                        || num_configs == 0
-                    {
-                        panic!("Failed to choose EGL config");
-                    }
+                    tracing::info!("Using EGL_NO_CONFIG_KHR for surfaceless context");
 
                     // Wrap with smithay's EGLDisplay
-                    EGLDisplay::from_raw(egl_display, *config).expect("Failed to wrap EGL display")
+                    EGLDisplay::from_raw(egl_display, config)
+                        .expect("Failed to wrap EGL display")
                 }
             };
 
