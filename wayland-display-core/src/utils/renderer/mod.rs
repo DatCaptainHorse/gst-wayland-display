@@ -39,43 +39,77 @@ pub fn setup_renderer(render_node: Option<DrmNode>) -> GlesRenderer {
                 tracing::info!("No render node, using surfaceless EGL for MIG");
 
                 unsafe {
-                    // Ensure EGL is loaded
-                    let dp_extensions = smithay::backend::egl::ffi::make_sure_egl_is_loaded()
+                    let _dp_extensions = smithay::backend::egl::ffi::make_sure_egl_is_loaded()
                         .expect("Failed to load EGL");
 
-                    tracing::debug!("EGL client extensions: {:?}", dp_extensions);
-
-                    // Get surfaceless platform display
-                    let egl_display = ffi_egl::GetPlatformDisplayEXT(
-                        0x31DD, // EGL_PLATFORM_SURFACELESS_MESA
-                        ffi_egl::DEFAULT_DISPLAY as *mut std::ffi::c_void,
-                        std::ptr::null(),
-                    );
+                    let egl_display = smithay::backend::egl::wrap_egl_call_ptr(|| {
+                        ffi_egl::GetPlatformDisplayEXT(
+                            0x31DD, // EGL_PLATFORM_SURFACELESS_MESA
+                            ffi_egl::DEFAULT_DISPLAY as *mut std::ffi::c_void,
+                            std::ptr::null(),
+                        )
+                    })
+                    .expect("Failed to get surfaceless display");
 
                     if egl_display == ffi_egl::NO_DISPLAY {
-                        panic!("Failed to get surfaceless EGL display");
+                        panic!("Surfaceless platform not supported");
                     }
 
-                    // Initialize
                     let mut major = 0;
                     let mut minor = 0;
-                    if ffi_egl::Initialize(egl_display, &mut major, &mut minor) == 0 {
+                    if ffi_egl::Initialize(egl_display, &mut major, &mut minor)
+                        == ffi_egl::FALSE as u32
+                    {
                         panic!("Failed to initialize EGL");
                     }
 
                     tracing::info!("EGL {}.{} initialized", major, minor);
 
-                    // Bind OpenGL ES API
                     ffi_egl::BindAPI(ffi_egl::OPENGL_ES_API);
 
-                    // Use EGL_NO_CONFIG_KHR since NVIDIA supports no-config contexts
-                    let config = ffi_egl::NO_CONFIG_KHR as *const std::ffi::c_void;
+                    // Choose config properly
+                    let config_attribs = [
+                        ffi_egl::SURFACE_TYPE as c_int,
+                        ffi_egl::PBUFFER_BIT as c_int,
+                        ffi_egl::RENDERABLE_TYPE as c_int,
+                        ffi_egl::OPENGL_ES2_BIT as c_int,
+                        ffi_egl::RED_SIZE as c_int,
+                        1,
+                        ffi_egl::GREEN_SIZE as c_int,
+                        1,
+                        ffi_egl::BLUE_SIZE as c_int,
+                        1,
+                        ffi_egl::ALPHA_SIZE as c_int,
+                        0,
+                        ffi_egl::DEPTH_SIZE as c_int,
+                        0,
+                        ffi_egl::STENCIL_SIZE as c_int,
+                        0,
+                        ffi_egl::NONE as c_int,
+                    ];
 
-                    tracing::info!("Using EGL_NO_CONFIG_KHR for surfaceless context");
+                    let mut configs: Vec<*const std::ffi::c_void> = vec![std::ptr::null(); 10];
+                    let mut num_configs = 0;
 
-                    // Wrap with smithay's EGLDisplay
-                    EGLDisplay::from_raw(egl_display, config)
-                        .expect("Failed to wrap EGL display")
+                    if ffi_egl::ChooseConfig(
+                        egl_display,
+                        config_attribs.as_ptr(),
+                        configs.as_mut_ptr() as *mut _,
+                        10,
+                        &mut num_configs,
+                    ) == ffi_egl::FALSE as u32
+                    {
+                        panic!("ChooseConfig failed");
+                    }
+
+                    if num_configs == 0 {
+                        panic!("No matching EGL configs found");
+                    }
+
+                    let config = configs[0];
+                    tracing::info!("Chose EGL config: {:p}", config);
+
+                    EGLDisplay::from_raw(egl_display, config).expect("Failed to wrap EGL display")
                 }
             };
 
