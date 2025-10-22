@@ -13,9 +13,10 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 path = "src/lib.rs"
 
 [features]
-default = ["cuda", "gbm"]
+default = ["cuda", "gbm", "xwayland"]
 cuda = ["dep:libloading"]
 gbm = ["smithay/backend_gbm"]
+xwayland = ["smithay/xwayland"]
 
 [dependencies]
 gst.workspace = true

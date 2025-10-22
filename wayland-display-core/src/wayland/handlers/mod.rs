@@ -10,3 +10,5 @@ pub mod shm;
 pub mod viewporter;
 pub mod wl_drm;
 pub mod xdg;
+#[cfg(feature = "xwayland")]
+pub mod xwayland;

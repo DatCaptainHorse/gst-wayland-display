@@ -5,10 +5,13 @@ use smithay::backend::input::AxisSource;
 use smithay::backend::input::TouchSlot;
 use smithay::backend::renderer::ImportEgl;
 use smithay::backend::renderer::gles::GlesRenderer;
+
 #[cfg(feature = "gbm")]
 use smithay::reexports::gbm::BufferObjectFlags;
 use smithay::wayland::dmabuf::DmabufFeedbackBuilder;
 use smithay::wayland::presentation::Refresh;
+#[cfg(feature = "xwayland")]
+use smithay::xwayland::{XWayland, XWaylandEvent, xwm::X11Wm};
 use smithay::{
     backend::{
         allocator::{Fourcc, dmabuf::Dmabuf},
@@ -137,6 +140,13 @@ pub struct State {
     pub shm_state: ShmState,
     viewporter_state: ViewporterState,
     cursor_event_count: i32,
+
+    #[cfg(feature = "xwayland")]
+    pub xwayland_shell_state: smithay::wayland::xwayland_shell::XWaylandShellState,
+    #[cfg(feature = "xwayland")]
+    pub xwm: Option<X11Wm>,
+    #[cfg(feature = "xwayland")]
+    pub xdisplay: Option<u32>,
 }
 
 impl State {
@@ -214,6 +224,13 @@ impl State {
         seat.add_pointer();
         seat.add_touch();
 
+        #[cfg(feature = "xwayland")]
+        let xwayland_shell_state =
+            smithay::wayland::xwayland_shell::XWaylandShellState::new::<State>(&dh);
+
+        #[cfg(feature = "xwayland")]
+        smithay::wayland::xwayland_keyboard_grab::XWaylandKeyboardGrabState::new::<State>(&dh);
+
         State {
             handle: event_loop_handle,
             should_quit: false,
@@ -253,6 +270,58 @@ impl State {
             shell_state,
             shm_state,
             viewporter_state,
+
+            #[cfg(feature = "xwayland")]
+            xwayland_shell_state,
+            #[cfg(feature = "xwayland")]
+            xwm: None,
+            #[cfg(feature = "xwayland")]
+            xdisplay: None,
+        }
+    }
+
+    #[cfg(feature = "xwayland")]
+    pub fn start_xwayland(&mut self) {
+        use std::process::Stdio;
+
+        let (xwayland, client) = XWayland::spawn(
+            &self.dh,
+            None,
+            std::iter::empty::<(String, String)>(),
+            true,
+            Stdio::null(),
+            Stdio::null(),
+            |_| (),
+        )
+        .expect("failed to start XWayland");
+
+        let ret = self.handle.insert_source(xwayland, move |event, _, data| {
+            match event {
+                XWaylandEvent::Ready {
+                    x11_socket,
+                    display_number,
+                } => {
+                    let mut wm = X11Wm::start_wm(data.handle.clone(), x11_socket, client.clone())
+                        .expect("Failed to attach X11 Window Manager");
+
+                    // Set default cursor for X11 windows
+                    let cursor_bytes = CURSOR_DATA_BYTES;
+                    wm.set_cursor(cursor_bytes, Size::from((64, 64)), Point::from((0, 0)))
+                        .ok();
+
+                    data.xwm = Some(wm);
+                    data.xdisplay = Some(display_number);
+
+                    tracing::info!("XWayland started on display :{}", display_number);
+                }
+                XWaylandEvent::Error => {
+                    tracing::warn!("XWayland crashed");
+                }
+            }
+        });
+
+        if let Err(e) = ret {
+            tracing::error!("Failed to insert XWayland into event loop: {}", e);
         }
     }
 }
@@ -281,6 +350,10 @@ pub(crate) fn init(
         &input_context,
         event_loop.handle(),
     );
+
+    // Start Xwayland
+    #[cfg(feature = "xwayland")]
+    state.start_xwayland();
 
     // init event loop
     state
@@ -714,7 +787,13 @@ pub(crate) fn init(
         )
         .unwrap();
 
-    let env_vars = vec![CString::new(format!("WAYLAND_DISPLAY={}", socket_name)).unwrap()];
+    let mut env_vars = vec![CString::new(format!("WAYLAND_DISPLAY={}", socket_name)).unwrap()];
+
+    #[cfg(feature = "xwayland")]
+    if let Some(display_num) = state.xdisplay {
+        env_vars.push(CString::new(format!("DISPLAY=:{}", display_num)).unwrap());
+    }
+
     if let Err(err) = envs_tx.send(env_vars) {
         tracing::warn!(?err, "Failed to post environment to application.");
     }
