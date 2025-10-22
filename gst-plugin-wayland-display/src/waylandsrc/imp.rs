@@ -624,6 +624,7 @@ impl BaseSrcImpl for WaylandDisplaySrc {
 
     fn set_caps(&self, caps: &gst::Caps) -> Result<(), gst::LoggableError> {
         let video_info = match VideoInfoDmaDrm::from_caps(caps) {
+            #[cfg(feature = "gbm")]
             Ok(dma_video_info) => GstVideoInfo::DMA(dma_video_info),
             #[cfg(feature = "cuda")]
             Err(_) => {
@@ -658,6 +659,10 @@ impl BaseSrcImpl for WaylandDisplaySrc {
                 } else {
                     GstVideoInfo::RAW(base_video_info)
                 }
+            },
+            #[cfg(not(feature = "gbm"))]
+            Ok(_) => {
+                todo!()
             }
             #[cfg(not(feature = "cuda"))]
             Err(_) => {

@@ -19,6 +19,7 @@ static = []
 capi = []
 doc = []
 cuda = []
+gbm = []
 
 [dependencies]
 gst.workspace = true

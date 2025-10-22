@@ -15,6 +15,7 @@ path = "src/lib.rs"
 [features]
 default = ["cuda"]
 cuda = ["dep:libloading"]
+gbm = ["smithay/backend_gbm"]
 
 [dependencies]
 gst.workspace = true
@@ -44,7 +45,6 @@ default-features = false
 features = [
     "backend_drm",
     "backend_egl",
-    "backend_gbm",
     "backend_libinput",
     "backend_udev",
     "renderer_gl",

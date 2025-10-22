@@ -13,6 +13,7 @@ pub struct CUDAParams {
 #[derive(Debug, Clone)]
 pub enum GstVideoInfo {
     RAW(VideoInfo),
+    #[cfg(feature = "gbm")]
     DMA(VideoInfoDmaDrm),
     #[cfg(feature = "cuda")]
     CUDA(CUDAParams),
@@ -24,6 +25,7 @@ impl From<VideoInfo> for GstVideoInfo {
     }
 }
 
+#[cfg(feature = "gbm")]
 impl From<VideoInfoDmaDrm> for GstVideoInfo {
     fn from(info: VideoInfoDmaDrm) -> Self {
         GstVideoInfo::DMA(info)
@@ -34,6 +36,7 @@ impl From<GstVideoInfo> for VideoInfo {
     fn from(info: GstVideoInfo) -> Self {
         match info {
             GstVideoInfo::RAW(info) => info,
+            #[cfg(feature = "gbm")]
             GstVideoInfo::DMA(info) => match info.to_video_info() {
                 Ok(info) => info,
                 Err(_) => VideoInfo::builder(info.format(), info.width(), info.height())

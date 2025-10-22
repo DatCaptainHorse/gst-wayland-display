@@ -5,6 +5,7 @@ use smithay::backend::input::AxisSource;
 use smithay::backend::input::TouchSlot;
 use smithay::backend::renderer::ImportEgl;
 use smithay::backend::renderer::gles::GlesRenderer;
+#[cfg(feature = "gbm")]
 use smithay::reexports::gbm::BufferObjectFlags;
 use smithay::wayland::dmabuf::DmabufFeedbackBuilder;
 use smithay::wayland::presentation::Refresh;
@@ -74,9 +75,11 @@ pub use self::focus::*;
 pub use self::input::*;
 pub use self::rendering::*;
 use crate::utils::allocator::{
-    GsBuffer, GsBufferType, GsCUDABuf, GsDmaBuf, GsGlesbuffer, VideoInfoTypes,
-    gst_video_format_to_drm_fourcc, gst_video_format_to_drm_modifier, new_gbm_device,
+    GsBuffer, GsBufferType, GsCUDABuf, GsGlesbuffer, VideoInfoTypes,
+    gst_video_format_to_drm_fourcc, gst_video_format_to_drm_modifier,
 };
+#[cfg(feature = "gbm")]
+use crate::utils::allocator::{GsDmaBuf, new_gbm_device};
 use crate::utils::device::gpu::GPUDevice;
 use crate::utils::renderer::setup_renderer;
 use crate::{utils::RenderTarget, wayland::protocols::wl_drm::create_drm_global};
@@ -348,6 +351,7 @@ pub(crate) fn init(
                                     .expect("Failed to create GsGlesbuffer");
                                 state.output_buffer = Some(GsBufferType::RAW(allocator));
                             }
+                            #[cfg(feature = "gbm")]
                             GstVideoInfo::DMA(base_info) => {
                                 let allocator = GsDmaBuf::new(render_node.unwrap(), base_info)
                                     .expect("Failed to create GsDmaBuf");
@@ -581,6 +585,7 @@ pub(crate) fn init(
                     let supported_formats = match &state.output_buffer {
                         None => match state.render_node {
                             // If there's no output_buffer, we'll return all supported DMA formats
+                            #[cfg(feature = "gbm")]
                             Some(node) => {
                                 let gbm_dev =
                                     new_gbm_device(node).expect("Failed to create gbm device");
@@ -596,7 +601,10 @@ pub(crate) fn init(
                                     .map(|f| *f)
                                     .collect()
                             }
+                            #[cfg(feature = "gbm")]
                             None => FormatSet::default(),
+                            #[cfg(not(feature = "gbm"))]
+                            _ => FormatSet::default(),
                         },
                         Some(output_buffer) => {
                             // If we already have negotiated an output buffer,

@@ -1,6 +1,7 @@
 #[cfg(feature = "cuda")]
 pub mod cuda;
 
+use smithay::backend::allocator::Modifier;
 use crate::DrmModifier;
 #[cfg(feature = "cuda")]
 use crate::utils::allocator::cuda::{
@@ -10,6 +11,7 @@ use gst::Buffer as GstBuffer;
 use gst_video::{VideoFormat, VideoInfo, VideoInfoDmaDrm, VideoMeta};
 use gstreamer_allocators::{DmaBufAllocator, FdMemoryFlags};
 use smithay::backend::allocator::dmabuf::{Dmabuf, DmabufAllocator};
+#[cfg(feature = "gbm")]
 use smithay::backend::allocator::gbm::{GbmAllocator, GbmBufferFlags, GbmDevice};
 use smithay::backend::allocator::{Allocator, Buffer, Fourcc};
 use smithay::backend::drm::DrmNode;
@@ -18,7 +20,6 @@ use smithay::backend::egl::ffi::egl::types::EGLDisplay;
 use smithay::backend::renderer::gles::{GlesError, GlesRenderbuffer, GlesRenderer, GlesTarget};
 use smithay::backend::renderer::{Bind, ExportMem, Offscreen, Renderer};
 use smithay::reexports::drm::buffer::DrmFourcc;
-use smithay::reexports::gbm::Modifier;
 use smithay::reexports::rustix::fs::{SeekFrom, seek};
 use smithay::utils::{DeviceFd, Rectangle};
 use std::fs::File;
@@ -51,6 +52,7 @@ impl GsGlesbuffer {
     }
 }
 
+#[cfg(feature = "gbm")]
 #[derive(Debug, Clone)]
 pub struct GsDmaBuf {
     buffer: Dmabuf,
@@ -58,6 +60,7 @@ pub struct GsDmaBuf {
     gst_allocator: DmaBufAllocator,
 }
 
+#[cfg(feature = "gbm")]
 pub fn new_gbm_device(render_node: DrmNode) -> Option<GbmDevice<DeviceFd>> {
     let file = File::options()
         .read(true)
@@ -68,6 +71,7 @@ pub fn new_gbm_device(render_node: DrmNode) -> Option<GbmDevice<DeviceFd>> {
     GbmDevice::new(fd).ok()
 }
 
+#[cfg(feature = "gbm")]
 impl GsDmaBuf {
     pub fn new(render_node: DrmNode, video_info: VideoInfoDmaDrm) -> Option<Self> {
         tracing::debug!("Creating DMA buffer from {:?}", &video_info);
@@ -90,7 +94,9 @@ impl GsDmaBuf {
             workaround_modifier = Some(DrmModifier::Unrecognized(0x0100000000000009));
         }
 
+        #[cfg(feature = "gbm")]
         let gbm = new_gbm_device(render_node)?;
+        #[cfg(feature = "gbm")]
         let allocator = GbmAllocator::new(gbm, GbmBufferFlags::RENDERING);
         let mut dma_allocator = DmabufAllocator(allocator);
 
@@ -222,6 +228,7 @@ impl GsCUDABuf {
 #[derive(Debug, Clone)]
 pub enum GsBufferType {
     RAW(GsGlesbuffer),
+    #[cfg(feature = "gbm")]
     DMA(GsDmaBuf),
     #[cfg(feature = "cuda")]
     CUDA(GsCUDABuf),
@@ -249,6 +256,7 @@ impl GsBuffer<GlesRenderer> for GsBufferType {
     fn bind(&mut self, renderer: &mut GlesRenderer) -> Result<GlesTarget, GlesError> {
         match self {
             GsBufferType::RAW(buffer) => renderer.bind(&mut buffer.buffer),
+            #[cfg(feature = "gbm")]
             GsBufferType::DMA(buffer) => renderer.bind(&mut buffer.buffer),
             #[cfg(feature = "cuda")]
             GsBufferType::CUDA(buffer) => renderer.bind(&mut buffer.buffer),
@@ -291,6 +299,7 @@ impl GsBuffer<GlesRenderer> for GsBufferType {
 
                 Ok(gst_buffer)
             }
+            #[cfg(feature = "gbm")]
             GsBufferType::DMA(buffer) => {
                 let mut gst_buffer = GstBuffer::new();
                 {
@@ -373,6 +382,7 @@ impl GsBuffer<GlesRenderer> for GsBufferType {
     fn get_video_info(&self) -> VideoInfoTypes {
         match self {
             GsBufferType::RAW(buffer) => VideoInfoTypes::VideoInfo(buffer.video_info.clone()),
+            #[cfg(feature = "gbm")]
             GsBufferType::DMA(buffer) => VideoInfoTypes::VideoInfoDmaDrm(buffer.video_info.clone()),
             #[cfg(feature = "cuda")]
             GsBufferType::CUDA(buffer) => {
@@ -537,6 +547,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "gbm")]
     fn test_dmabuf() {
         test_init();
 
