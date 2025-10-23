@@ -351,10 +351,6 @@ pub(crate) fn init(
         event_loop.handle(),
     );
 
-    // Start Xwayland
-    #[cfg(feature = "xwayland")]
-    state.start_xwayland();
-
     // init event loop
     state
         .handle
@@ -786,6 +782,10 @@ pub(crate) fn init(
             },
         )
         .unwrap();
+
+    // Start Xwayland
+    #[cfg(feature = "xwayland")]
+    state.start_xwayland();
 
     let mut env_vars = vec![CString::new(format!("WAYLAND_DISPLAY={}", socket_name)).unwrap()];
 

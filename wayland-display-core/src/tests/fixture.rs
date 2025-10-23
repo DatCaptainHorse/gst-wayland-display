@@ -35,7 +35,7 @@ impl Fixture {
         let display = Display::<State>::new().unwrap();
         let dh = display.handle();
 
-        let server_state = State::new(
+        let mut server_state = State::new(
             &RenderTarget::Software,
             &dh,
             &libinput_context,
@@ -48,6 +48,7 @@ impl Fixture {
         server_state
             .handle
             .insert_source(source, |client_stream, _, state| {
+                tracing::info!("Client connecting via socket");
                 if let Err(err) = state
                     .dh
                     .insert_client(client_stream, Arc::new(ClientState::default()))
@@ -76,6 +77,9 @@ impl Fixture {
         let wclient = WaylandClient::new(
             UnixStream::connect(format!("{}/{}", runtime_dir, socket_name)).unwrap(),
         );
+
+        #[cfg(feature = "xwayland")]
+        server_state.start_xwayland();
 
         let mut f = Fixture {
             client: wclient,

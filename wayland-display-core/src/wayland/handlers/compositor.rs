@@ -17,6 +17,7 @@ use smithay::{
         shell::xdg::{SurfaceCachedState, XdgPopupSurfaceData, XdgToplevelSurfaceData},
     },
 };
+use std::sync::OnceLock;
 
 use crate::comp::{ClientState, FocusTarget, State};
 
@@ -30,7 +31,13 @@ impl CompositorHandler for State {
     }
 
     fn client_compositor_state<'a>(&self, client: &'a Client) -> &'a CompositorClientState {
-        &client.get_data::<ClientState>().unwrap().compositor_state
+        static DEFAULT: OnceLock<CompositorClientState> = OnceLock::new();
+
+        client.get_data::<ClientState>()
+            .map(|state| &state.compositor_state)
+            .unwrap_or_else(|| {
+                DEFAULT.get_or_init(|| CompositorClientState::default())
+            })
     }
 
     fn commit(&mut self, surface: &WlSurface) {
