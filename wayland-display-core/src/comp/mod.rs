@@ -287,9 +287,7 @@ impl State {
         let (xwayland, client) = XWayland::spawn(
             &self.dh,
             None,
-            vec![
-                ("__EGL_VENDOR_LIBRARY_FILENAMES", "mesa"),
-            ],
+            std::iter::empty::<(String, String)>(),
             true,
             Stdio::null(),
             Stdio::null(),
