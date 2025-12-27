@@ -33,6 +33,13 @@ impl State {
         assert!(self.video_info.is_some());
         assert!(self.output_buffer.is_some());
 
+        let scale = self
+            .output
+            .as_ref()
+            .unwrap()
+            .current_scale()
+            .fractional_scale();
+
         let elements =
             if Instant::now().duration_since(self.last_pointer_movement) < Duration::from_secs(5) {
                 match &self.cursor_state {
@@ -40,7 +47,7 @@ impl State {
                     // TODO: icon?
                     MemoryRenderBufferRenderElement::from_buffer(
                         &mut self.renderer,
-                        self.pointer_location.to_physical_precise_round(1),
+                        self.pointer_location.to_physical_precise_round(scale),
                         &self.cursor_element,
                         None,
                         None,
@@ -53,7 +60,7 @@ impl State {
                     smithay::backend::renderer::element::surface::render_elements_from_surface_tree(
                         &mut self.renderer,
                         wl_surface,
-                        self.pointer_location.to_physical_precise_round(1),
+                        self.pointer_location.to_physical_precise_round(scale),
                         1.,
                         1.,
                         Kind::Cursor,
@@ -70,6 +77,9 @@ impl State {
         let mut target = output_buffer
             .bind(&mut self.renderer)
             .map_err(OutputDamageTrackerError::Rendering)?;
+
+        // Manually submit damage before rendering
+        self.dtr.as_mut().unwrap().damage_output(0, &*elements)?;
 
         let render_output_result = render_output(
             self.output.as_ref().unwrap(),

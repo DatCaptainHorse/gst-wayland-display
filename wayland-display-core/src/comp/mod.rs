@@ -450,7 +450,6 @@ pub(crate) fn init(
                                     .expect("Error during render_result.sync"); // we need to wait before giving a hardware buffer to gstreamer or we might not be done writing to it
                                 let res = buffer_sender.send(Ok(buf));
                                 let rendered_states = &render_result.states;
-                                let rendered_damage = render_result.damage.is_some();
 
                                 if let Some(output) = state.output.as_ref() {
                                     let mut output_presentation_feedback =
@@ -482,21 +481,19 @@ pub(crate) fn init(
                                             },
                                         );
                                     }
-                                    if rendered_damage {
-                                        output_presentation_feedback.presented(
-                                            state.clock.now(),
-                                            output
-                                                .current_mode()
-                                                .map(|mode| {
-                                                    Refresh::fixed(Duration::from_secs_f64(
-                                                        1_000f64 / mode.refresh as f64,
-                                                    ))
-                                                })
-                                                .unwrap_or(Refresh::Unknown),
-                                            0,
-                                            wp_presentation_feedback::Kind::Vsync,
-                                        );
-                                    }
+                                    output_presentation_feedback.presented(
+                                        state.clock.now(),
+                                        output
+                                            .current_mode()
+                                            .map(|mode| {
+                                                Refresh::fixed(Duration::from_secs_f64(
+                                                    1_000f64 / mode.refresh as f64,
+                                                ))
+                                            })
+                                            .unwrap_or(Refresh::Unknown),
+                                        0,
+                                        wp_presentation_feedback::Kind::Vsync,
+                                    );
                                     if let CursorImageStatus::Surface(wl_surface) =
                                         &state.cursor_state
                                     {
